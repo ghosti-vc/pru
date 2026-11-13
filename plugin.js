@@ -1,38 +1,50 @@
+const BASE_URL = "https://tu-api-aqui.com"; // <- CAMBIA ESTO por tu API
 const CACHE = new Map();
+const CACHE_TTL = 1000 * 60 * 60; // 1 hora
 
-async function getMeta(type, id) {
-    const cacheKey = `meta_${type}_${id}`;
+// Utilidad para fetch con cache
+async function fetchData(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return await res.json();
+}
+
+function optimizeImage(url, size = "w300") {
+    if (!url) return null;
+    return url.includes('/original/') ? url.replace('/original/', `/${size}/`) : url;
+}
+
+// 1. CATALOGO
+async function getCatalog(type, id) {
+    const cacheKey = `catalog_${type}_${id}`;
     if (CACHE.has(cacheKey)) return CACHE.get(cacheKey);
 
-    const data = await fetchData(id); // usa tu función de fetch actual
+    const data = await fetchData(`${BASE_URL}/${type}?page=1`);
+    
+    const metas = data.results.map(item => ({
+        id: item.id,
+        type: type,
+        name: item.title || item.name,
+        poster: optimizeImage(item.poster_path),
+        description: item.overview
+    }));
 
-    // Optimizado: paralelo + imágenes w300 + solo url
-    const episodes = await Promise.all(
-        data.episodes.map(async ep => {
-            let poster = ep.poster || data.poster || null;
-            if (poster && poster.includes('/original/')) {
-                poster = poster.replace('/original/', '/w300/');
-            }
-            
-            return {
-                id: ep.id,
-                name: ep.name,
-                poster: poster, // Kino lo descarga con lazy
-                description: ep.overview || ""
-            }
-        })
-    );
-
-    const result = {
-        id,
-        type,
-        name: data.title,
-        poster: data.poster?.replace('/original/', '/w300/'),
-        background: data.backdrop?.replace('/original/', '/w1280/'),
-        description: data.overview,
-        episodes
-    };
-
-    CACHE.set(cacheKey, result);
-    return result;
+    CACHE.set(cacheKey, metas);
+    return metas;
 }
+
+// 2. BUSQUEDA
+async function search(query) {
+    const data = await fetchData(`${BASE_URL}/search?query=${encodeURIComponent(query)}`);
+    
+    return data.results.map(item => ({
+        id: item.id,
+        type: item.media_type,
+        name: item.title || item.name,
+        poster: optimizeImage(item.poster_path),
+        description: item.overview
+    }));
+}
+
+// 3. META - ESTA ES LA QUE HACE LENTO TODO
+async function getMeta(type, id)
