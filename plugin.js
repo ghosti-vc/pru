@@ -387,6 +387,9 @@ async function pjSearch(q) {
 
 async function pjEpisodes(kind, id, slug) {
   const apiKind = kind === "a" ? "anime" : "serie";
+  // Temporada 1 (página 1) se pide a la vez que el detalle, en vez de esperar a que el detalle responda.
+  const pre = getJson(PJ_API + "/episodes?item_id=" + id + "&season=1&limit=50&page=1", PJ + "/");
+  pre.catch(() => {});
   const det = slug ? await getJson(PJ_API + "/content/" + apiKind + "/" + enc(slug), PJ + "/") : {};
   const info = det.item || {};
   const title = stripTags(info.title || info.name || slug.replace(/-/g, " "));
@@ -395,7 +398,7 @@ async function pjEpisodes(kind, id, slug) {
   const out = [];
   const one = async (s) => {
     for (let page = 1; page <= 4; page++) {
-      const d = await getJson(PJ_API + "/episodes?item_id=" + id + "&season=" + s + "&limit=50&page=" + page, PJ + "/");
+      const d = (s === 1 && page === 1) ? await pre : await getJson(PJ_API + "/episodes?item_id=" + id + "&season=" + s + "&limit=50&page=" + page, PJ + "/");
       const eps = d.episodes || [];
       for (const e of eps) {
         const num = Number(e.episode) || out.length + 1;
@@ -1482,7 +1485,27 @@ async function expandRefsCached(raw) {
 
 // Cada tarea devuelve un arreglo (vacío si no hubo nada). Cuando llega la primera con datos,
 // se espera graceMs más a las demás; las que no lleguen se ignoran.
-const GRACE_MS = 3000;
+const GRACE_MS = 700;
+
+// Fuentes alternativas del mismo capítulo: se buscan SOLO al reproducir, si la fuente de la lista no dio video.
+async function altRefsFor(ttTag, known, key) {
+  try {
+    const { refs } = await expandRefsCached("mx|" + known.join("||") + "||" + ttTag);
+    const extra = refs.filter((r) => known.indexOf(r) < 0);
+    const res = await Promise.allSettled(extra.map((r) => withTimeout(episodesOne(r), 8000)));
+    const out = [];
+    res.forEach((x) => {
+      if (x.status !== "fulfilled" || !x.value) return;
+      const hit = x.value.episodes.find((e) => (e.season + "x" + e.number) === key);
+      if (hit) out.push(hit.ref);
+    });
+    log("alternativas para " + key + ": " + out.map((r) => r.slice(0, 2)).join(","));
+    return out;
+  } catch (e) {
+    log("alternativas fallaron: " + String((e && e.message) || e).slice(0, 60));
+    return [];
+  }
+}
 
 function firstThenGrace(tasks, graceMs) {
   return new Promise((resolve) => {
@@ -1519,11 +1542,10 @@ export async function episodes(ref) {
 
   const isMovie = tt ? tt.split(":")[2] === "m" : known.every((r) => r.split("|")[1] === "m");
 
-  // Película: un solo capítulo que recuerda todas las fuentes. Solo se busca en otros sitios si hacen falta.
+  // Película: un solo capítulo con las fuentes de la tarjeta. No se busca en otros sitios aquí (se hace al reproducir si hace falta).
   if (isMovie) {
-    let refs = known;
-    if (tt && known.length < 2) refs = (await expandRefsCached(raw)).refs;
-    const out = { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
+    const mref = "mx|" + known.join("||") + (tt ? "||" + tt + "||ep:1x1" : "");
+    const out = { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: mref, title: tr("Película", "Movie") }] };
     cset(epCache, raw, out);
     return out;
   }
@@ -1537,17 +1559,6 @@ export async function episodes(ref) {
     log("episodios: falló " + r.slice(0, 2) + " " + String((e && e.message) || e).slice(0, 40));
     return [];
   }));
-
-  if (tt && known.length < 2) {
-    tasks.push((async () => {
-      const { refs } = await expandRefsCached(raw);
-      const extra = refs.filter((r) => known.indexOf(r) < 0);
-      const res = await Promise.allSettled(extra.map(one));
-      const out = [];
-      res.forEach((x) => { if (x.status === "fulfilled") out.push.apply(out, x.value); });
-      return out;
-    })().catch(() => []));
-  }
 
   const results = await firstThenGrace(tasks, GRACE_MS);
   if (!results.length) {
@@ -1574,7 +1585,8 @@ export async function episodes(ref) {
       if (o && alts.indexOf(o) < 0) alts.push(o);
     });
     alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
-    return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.join("||") }) : e;
+    const tag = (tt ? "||" + tt : "") + "||ep:" + e.season + "x" + e.number;
+    return Object.assign({}, e, { ref: "mx|" + alts.join("||") + tag });
   });
   eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
 
@@ -1633,7 +1645,10 @@ export async function resolve(ref) {
   await null;
   const t0 = Date.now();
   const raw = String(ref || "");
-  const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
+  const parts0 = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter(Boolean);
+  const refs = parts0.filter((x) => x.indexOf("tt:") !== 0 && x.indexOf("ep:") !== 0).slice(0, 8);
+  const ttTag = parts0.find((x) => x.indexOf("tt:") === 0) || "";
+  const epTag = parts0.find((x) => x.indexOf("ep:") === 0) || "";
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   const total = 17000;
   const left = () => total - (Date.now() - t0);
@@ -1711,6 +1726,14 @@ export async function resolve(ref) {
   if (winner) {
     if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1500);
     return winner.v;
+  }
+
+  // 3b) la fuente de la lista no dio video: se buscan las otras fuentes del mismo capítulo (solo ahora)
+  if (epTag && ttTag) {
+    const alt = await altRefsFor(ttTag, refs, epTag.slice(3));
+    if (alt.length) {
+      try { return await resolve("mx|" + alt.join("||")); } catch (e) { log("resolve: las alternativas tampoco dieron video"); }
+    }
   }
 
   // 4) enlaces directos de otros idiomas
