@@ -1380,15 +1380,10 @@ export async function categories() {
 
 // Todas las búsquedas a la vez (sin unir): se usa en el buscador y para encontrar el mismo título en otras fuentes.
 const deadUntil = {};
-async function searchAll(qa, ms, each) {
+async function searchAll(qa, ms) {
   const jobs = [["pj", pjSearch], ["hs", hsSearch], ["po", (q) => nxSearch("po", q)], ["cu", (q) => nxSearch("cu", q)], ["cc", ccSearch], ["sm", smSearch], ["sf", sfSearch], ["ph", phSearch], ["lc", lcSearch], ["st", stSearch], ["pp", ppSearch]]
     .filter(([n]) => !(deadUntil[n] > Date.now()));
-  const res = await Promise.allSettled(jobs.map(([, f]) => {
-    const p = withTimeout(f(qa), Math.min(ms || 9000, 7000));
-    // Aviso opcional: cada fuente avisa en cuanto termina (lo que devuelve la función no cambia).
-    if (each) p.then((v) => { try { each(v); } catch (e) { /* sin efecto */ } }, () => {});
-    return p;
-  }));
+  const res = await Promise.allSettled(jobs.map(([, f]) => withTimeout(f(qa), Math.min(ms || 9000, 7000))));
   const all = [];
   res.forEach((r, i) => {
     if (r.status === "fulfilled") all.push.apply(all, r.value);
@@ -1440,16 +1435,7 @@ async function expandRefs(raw) {
   const parts = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter(Boolean);
   const refs = parts.filter((x) => x.indexOf("tt:") !== 0);
   const tt = parts.find((x) => x.indexOf("tt:") === 0);
-  // La lista de capítulos de cada fuente arranca en cuanto se conoce la fuente (la de la tarjeta, desde el primer segundo).
-  const lists = new Map();
-  const start = (r) => {
-    if (lists.has(r)) return;
-    const p = withTimeout(episodesOne(r), 14000);
-    p.catch(() => {});
-    lists.set(r, p);
-  };
-  refs.forEach(start);
-  if (!tt) return { refs, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s", lists };
+  if (!tt) return { refs, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
   const tp = tt.split(":");
   const title = dec(tp[1] || "");
   const kind = tp[2] === "m" ? "m" : "s";
@@ -1458,32 +1444,30 @@ async function expandRefs(raw) {
     const qa = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
     const want = normTitle(title);
     if (qa && want) {
-      const consider = (it) => {
+      const found = await searchAll(qa, 7000);
+      for (const it of found) {
         const src = it.ref.slice(0, 2);
-        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) return;
+        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
         have.add(src);
         refs.push(it.ref);
-        start(it.ref);
-      };
-      const found = await searchAll(qa, 7000, (items) => (items || []).forEach(consider));
-      for (const it of found) consider(it);
+      }
     }
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
   refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
   log("fuentes para este título: " + refs.map((r) => r.slice(0, 2)).join(","));
-  return { refs: refs.slice(0, 8), kind, lists };
+  return { refs: refs.slice(0, 8), kind };
 }
 
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
-  const { refs, kind, lists } = await expandRefs(raw);
+  const { refs, kind } = await expandRefs(raw);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   // Película: un solo capítulo que recuerda todas las fuentes.
   if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
     return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
   }
-  const res = await Promise.allSettled(refs.map((r) => lists.get(r) || withTimeout(episodesOne(r), 14000)));
+  const res = await Promise.allSettled(refs.map((r) => withTimeout(episodesOne(r), 14000)));
   let best = null;
   let bestI = -1;
   res.forEach((r, i) => {
