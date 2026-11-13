@@ -1387,6 +1387,7 @@ async function searchAll(qa, ms, early) {
   // y pasaron unos segundos, sin esperar a las lentas. Lo demás (capítulos, respaldos) sigue esperando a todas.
   if (early && typeof kino.sleep === "function") {
     const limit = Math.min(ms || 9000, 7000);
+    const grace = typeof early === "number" ? early : 4000;
     const slots = jobs.map(() => []);
     let done = 0;
     let firstAt = 0;
@@ -1400,7 +1401,7 @@ async function searchAll(qa, ms, early) {
       }).then(() => { done++; });
     });
     while (done < jobs.length) {
-      if (firstAt && Date.now() - firstAt > 2500) break;
+      if (firstAt && Date.now() - firstAt > grace) break;
       await kino.sleep(150);
     }
     const out = [];
@@ -1468,7 +1469,7 @@ async function expandRefs(raw) {
     const qa = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
     const want = normTitle(title);
     if (qa && want) {
-      const found = await searchAll(qa, 7000);
+      const found = await searchAll(qa, 7000, 2000);
       for (const it of found) {
         const src = it.ref.slice(0, 2);
         if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
@@ -1482,16 +1483,44 @@ async function expandRefs(raw) {
   return { refs: refs.slice(0, 8), kind };
 }
 
+// Espera las listas de capítulos: cuando ya llegó una, da unos segundos a las demás y sigue sin esperar a las lentas.
+async function settleSoon(ps, grace) {
+  if (typeof kino.sleep !== "function") return Promise.allSettled(ps);
+  const out = ps.map(() => ({ status: "rejected", reason: new Error("tardó demasiado") }));
+  const startAt = Date.now();
+  let done = 0;
+  let firstAt = 0;
+  ps.forEach((p, i) => {
+    Promise.resolve(p).then((v) => {
+      out[i] = { status: "fulfilled", value: v };
+      if (v && v.episodes && v.episodes.length && !firstAt) firstAt = Date.now();
+    }, (e) => { out[i] = { status: "rejected", reason: e }; }).then(() => { done++; });
+  });
+  while (done < ps.length) {
+    if (firstAt && Date.now() - Math.max(firstAt, startAt) > grace) break;
+    await kino.sleep(150);
+  }
+  return out.slice();
+}
+
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
+  // Las listas de las fuentes que ya conocemos arrancan ya, mientras se buscan las demás fuentes.
+  const started = new Map();
+  (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).forEach((r) => {
+    if (r.split("|")[1] === "m") return;
+    const p = withTimeout(episodesOne(r), 14000);
+    p.catch(() => {});
+    started.set(r, p);
+  });
   const { refs, kind } = await expandRefs(raw);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   // Película: un solo capítulo que recuerda todas las fuentes.
   if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
     return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
   }
-  const res = await Promise.allSettled(refs.map((r) => withTimeout(episodesOne(r), 14000)));
+  const res = await settleSoon(refs.map((r) => started.get(r) || withTimeout(episodesOne(r), 14000)), 3000);
   let best = null;
   let bestI = -1;
   res.forEach((r, i) => {
