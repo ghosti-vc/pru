@@ -1,28 +1,38 @@
 {
-  "id": "ghosti.pelis-tv",
-  "name": "Pelis-TV",
-  "version": "1.0.1",
-  "apiVersion": 14,
-  "description": "Plugin para ver series y pelis",
-  "icon": "https://tu-icono.png",
-  "catalogs": [
-    {
-      "type": "series",
-      "id": "pelis-tv-series",
-      "name": "Series Pelis-TV"
-    },
-    {
-      "type": "movie",
-      "id": "pelis-tv-movies", 
-      "name": "Pelis Pelis-TV"
-    }
+  "id": "pelis-tv",
+  "name": "Pelis TV",
+  "description": "Películas, series, anime, series turcas y caricaturas en español desde muchas fuentes.",
+  "author": "Ghosti-vc",
+  "version": "0.7.4",
+  "apiVersion": 9,
+  "entry": "plugin.js",
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
   ],
-  "resources": ["catalog", "meta", "stream"],
-  "types": ["series", "movie"],
-  "behaviorHints": {
-    "configurationRequired": false,
-    "adult": false,
-    "cacheMeta": true,
-    "cacheCatalog": true
-  }
+  "hosts": [
+    "pelisjuanita.org",
+    "www.pelisjuanita.org",
+    "hackstore3.net",
+    "www.fuegocine.com",
+    "pelisflix200.store",
+    "image.tmdb.org",
+    "www.poseidonhd2.co",
+    "player.poseidonhd2.co",
+    "wv3.cuevana3.eu",
+    "www.pelisplushd.la",
+    "tioplus.app",
+    "www.cinecalidad.am",
+    "www3.seriesmetro.net",
+    "www.lacartoons.com",
+    "tbg.seriesturcastv.to",
+    "seriesflixhd.lol",
+    "pelisflixhd.win"
+  ],
+  "browser": true,
+  "fetchHosts": "any",
+  "streamHosts": "any"
 }
