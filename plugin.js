@@ -1544,7 +1544,21 @@ export async function episodes(ref) {
     if (r.status === "fulfilled" && r.value) for (const e of r.value.episodes) m.set(e.season + "x" + e.number, e.ref);
     return m;
   });
-  const eps = best.episodes.map((e) => {
+  // Capítulos que faltan en la lista principal pero otra fuente sí tiene (solo fuentes con las mismas temporadas, para no mezclar numeraciones).
+  const seasonsOf = (d) => Array.from(new Set(d.episodes.map((e) => e.season))).sort((a, b) => a - b).join(",");
+  const baseSeasons = seasonsOf(best);
+  const haveKeys = new Set(best.episodes.map((e) => e.season + "x" + e.number));
+  const extra = [];
+  res.forEach((r, i) => {
+    if (i === bestI || r.status !== "fulfilled" || !r.value || !r.value.episodes.length) return;
+    if (seasonsOf(r.value) !== baseSeasons) return;
+    for (const e of r.value.episodes) {
+      const k = e.season + "x" + e.number;
+      if (!haveKeys.has(k)) { haveKeys.add(k); extra.push(e); }
+    }
+  });
+  if (extra.length) log("episodios: " + extra.length + " capítulos extra de otras fuentes");
+  const eps = best.episodes.concat(extra).map((e) => {
     const alts = [e.ref];
     byKey.forEach((m, i) => { if (i !== bestI) { const o = m.get(e.season + "x" + e.number); if (o && alts.indexOf(o) < 0) alts.push(o); } });
     alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
