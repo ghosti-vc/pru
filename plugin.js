@@ -459,14 +459,31 @@ async function hsSearch(q) {
   return ((d.data || {}).posts || []).map((x) => hsItem(x)).filter(Boolean);
 }
 
+function hedge(f) {
+  return new Promise((resolveAll, rejectAll) => {
+    let settled = false;
+    let fails = 0;
+    const run = () => {
+      if (settled) return;
+      Promise.resolve().then(f).then((v) => { if (!settled) { settled = true; resolveAll(v); } }, (e) => {
+        fails++;
+        if (fails >= 3 && !settled) { settled = true; rejectAll(e); }
+      });
+    };
+    run();
+    sleepUpTo(3000).then(run, () => {});
+    sleepUpTo(6000).then(run, () => {});
+  });
+}
+
 async function hsEpisodes(id, slug) {
   const title = stripTags(String(slug || "").replace(/-/g, " "));
-  const first = await getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=1&page=1&postsPerPage=50", HS + "/");
+  const first = await hedge(() => getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=1&page=1&postsPerPage=50", HS + "/"));
   let seasons = (((first.data || {}).seasons) || ["1"]).map((s) => String(s)).filter((s) => /^\d+$/.test(s));
   if (seasons.indexOf("1") < 0) seasons.unshift("1");
   const out = [];
   const one = async (s) => {
-    const d = s === "1" ? first : await getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=" + s + "&page=1&postsPerPage=50", HS + "/");
+    const d = s === "1" ? first : await hedge(() => getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=" + s + "&page=1&postsPerPage=50", HS + "/"));
     for (const e of (d.data || {}).posts || []) {
       const eid = e._id || e.id;
       if (!eid) continue;
@@ -1533,13 +1550,39 @@ const isDirect = (c) => /\.(m3u8|mp4)(\?|$)/i.test(c.url) && !isDemo(c.url);
 const asDirect = (c) => ({ url: c.url, mime: /\.m3u8/i.test(c.url) ? "application/x-mpegurl" : "video/mp4", label: c.label, headers: playHeaders(c.referer || REF) });
 
 // Un video HLS solo vale si su lista de reproducción abre de verdad (hay servidores que entregan enlaces que luego fallan).
+const deadHost = {};
+const baseHost = (u) => hostOf(u).split(".").slice(-2).join(".").toLowerCase();
+const isDead = (u) => (deadHost[baseHost(u)] || 0) > Date.now();
+
 async function verifyMedia(m) {
   if (!/mpegurl/i.test(String(m && m.mime))) return true;
-  try {
-    const r = await withTimeout(kino.fetch(m.url, { headers: m.headers || {} }), 4500);
-    if (!r.ok) return false;
+  const probe = async (h) => {
+    const r = await withTimeout(kino.fetch(m.url, { headers: h }), 4500);
+    if (!r.ok) return r.status;
     const t = await r.text();
-    return /#EXTM3U/.test(String(t).slice(0, 400));
+    return /#EXTM3U/.test(String(t).slice(0, 400)) ? 200 : 0;
+  };
+  try {
+    const st = await probe(m.headers || {});
+    if (st === 200) return true;
+    if (st !== 403) return false;
+    // 403: se prueban otras cabeceras a la vez (algunos servidores piden otro origen o ninguno).
+    const ref = String((m.headers && m.headers.Referer) || "");
+    const root = (/^(https?:\/\/[^\/?#]+)/i.exec(ref) || [])[1] || "";
+    const self = (/^(https?:\/\/[^\/?#]+)/i.exec(m.url) || [])[1] || "";
+    const variants = [
+      { Referer: root + "/", "User-Agent": UA },
+      { "User-Agent": UA },
+      { Referer: root + "/", Origin: root, "User-Agent": UA, Accept: "*/*", "Accept-Language": "es-MX,es;q=0.9" },
+      { Referer: self + "/", Origin: self, "User-Agent": UA },
+    ];
+    const rs = await Promise.allSettled(variants.map((h) => probe(h)));
+    const codes = rs.map((r) => (r.status === "fulfilled" ? r.value : "x"));
+    const ok = codes.indexOf(200);
+    log("resolve: 403 en " + hostOf(m.url) + ", otras cabeceras: " + codes.join(","));
+    if (ok >= 0) { m.headers = variants[ok]; return true; }
+    deadHost[baseHost(m.url)] = Date.now() + 20 * 60 * 1000;
+    return false;
   } catch (e) { return false; }
 }
 
@@ -1563,6 +1606,12 @@ export async function resolve(ref) {
     else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
   });
   cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
+  const before = cands.length;
+  cands = cands.filter((c) => !isDead(c.url));
+  if (before && !cands.length) {
+    log("resolve: los servidores de este título dieron 403 hace poco, se omiten");
+    throw kino.error("unavailable", "servidores sin acceso", { userMessage: tr("Los servidores de este título no abren desde aquí. Prueba otro título u otra fuente.", "This title's servers do not open from here. Try another title.") });
+  }
   // Servidores que piden verificación humana o que nunca entregaron video: solo si no hay otros.
   const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
@@ -1589,7 +1638,7 @@ export async function resolve(ref) {
     v.label = c.label;
     const l = c.lang || 0;
     if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l }; }
-    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url))) fallback = v; }
+    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url)) && !isDead(c.url)) fallback = v; }
   };
   const start = (c) => {
     pending++;
@@ -1600,7 +1649,7 @@ export async function resolve(ref) {
   };
   const startCapture = () => {
     if (captureStarted || !browserOk || winner) return;
-    const fe = embeds.find((c) => !BAD.test(hostOf(c.url))) || embeds[0];
+    const fe = embeds.find((c) => !BAD.test(hostOf(c.url)) && !isDead(c.url)) || embeds.find((c) => !isDead(c.url));
     if (!fe || left() < 5000) return;
     captureStarted = true;
     pending++;
