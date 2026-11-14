@@ -1326,7 +1326,7 @@ const SECTIONS = {
   "valoradas-series": { genre: "series", parts: [() => (n) => pjRatedPage("series", n)] },
 };
 
-const SRC_PRIO = { pj: 0, hs: 1, ac: 2, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
+const SRC_PRIO = { ac: -1, pj: 0, hs: 1, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
 
 function normTitle(t) {
   return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
@@ -1699,4 +1699,4 @@ export async function resolve(ref) {
   throw lastErr && lastErr.code ? lastErr : kino.error("unavailable", "ningún servidor entregó el video", {
     userMessage: tr("Ningún servidor de este título se pudo abrir desde aquí. Prueba otro título.", "No server for this title could be opened from here. Try another title."),
   });
-} 
+}
