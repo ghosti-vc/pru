@@ -3,7 +3,7 @@
   "name": "Pelis TV",
   "description": "Películas, series, anime, series turcas y caricaturas en español desde muchas fuentes.",
   "author": "Ghosti-vc",
-  "version": "0.9.0",
+  "version": "0.7.4",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -31,37 +31,16 @@
     "tbg.seriesturcastv.to",
     "seriesflixhd.lol",
     "pelisflixhd.win",
-    "api.themoviedb.org"
+    "allcalidad.re",
+    "vimeos.net",
+    "s1.vimeos.net",
+    "s2.vimeos.net",
+    "*.vimeos.net",
+    "vimeos.zip",
+    "*.vimeos.zip",
+    "goodstream.one"
   ],
   "browser": true,
   "fetchHosts": "any",
-  "streamHosts": "any",
-  "settings": [
-    {
-      "key": "epsource",
-      "label": "Lista de capítulos",
-      "labelEn": "Episode list",
-      "type": "select",
-      "default": "fuentes",
-      "options": [
-        {
-          "value": "fuentes",
-          "label": "De las fuentes (por defecto)",
-          "labelEn": "From the sources (default)"
-        },
-        {
-          "value": "tmdb",
-          "label": "De TMDB (rápida, prueba)",
-          "labelEn": "From TMDB (fast, test)"
-        }
-      ]
-    },
-    {
-      "key": "tmdbKey",
-      "label": "Clave de TMDB (solo si usas TMDB)",
-      "labelEn": "TMDB key (only for TMDB)",
-      "type": "text",
-      "default": ""
-    }
-  ]
+  "streamHosts": "any"
 }
