@@ -3,7 +3,7 @@
   "name": "Pelis TV",
   "description": "Películas, series, anime, series turcas y caricaturas en español desde muchas fuentes.",
   "author": "Ghosti-vc",
-  "version": "0.7.6",
+  "version": "0.8.3",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -19,6 +19,7 @@
     "hackstore3.net",
     "www.fuegocine.com",
     "pelisflix200.store",
+    "api.themoviedb.org",
     "image.tmdb.org",
     "www.poseidonhd2.co",
     "player.poseidonhd2.co",
@@ -30,253 +31,17 @@
     "www.lacartoons.com",
     "tbg.seriesturcastv.to",
     "seriesflixhd.lol",
-    "pelisflixhd.win",
-    "allcalidad.re",
-    "vimeos.net",
-    "s1.vimeos.net",
-    "s2.vimeos.net",
-    "*.vimeos.net",
-    "vimeos.zip",
-    "*.vimeos.zip",
-    "goodstream.one"
+    "pelisflixhd.win"
   ],
   "browser": true,
   "fetchHosts": "any",
   "streamHosts": "any",
   "settings": [
     {
-      "key": "secSources",
-      "label": "Fuentes",
-      "labelEn": "Sources",
-      "type": "section"
-    },
-    {
-      "key": "src_pj",
-      "label": "PelisJuanita (películas, series y anime)",
-      "labelEn": "PelisJuanita (movies, series and anime)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_hs",
-      "label": "HackStore (películas, series y anime)",
-      "labelEn": "HackStore (movies, series and anime)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_ac",
-      "label": "AllCalidad (películas, series y anime)",
-      "labelEn": "AllCalidad (movies, series and anime)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_po",
-      "label": "Poseidon (películas y series)",
-      "labelEn": "Poseidon (movies and series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_cu",
-      "label": "Cuevana (películas y series)",
-      "labelEn": "Cuevana (movies and series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_pp",
-      "label": "PelisPlus (películas y series)",
-      "labelEn": "PelisPlus (movies and series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_cc",
-      "label": "CineCalidad (solo películas)",
-      "labelEn": "CineCalidad (movies only)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_ph",
-      "label": "PelisflixHD (solo películas)",
-      "labelEn": "PelisflixHD (movies only)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_sf",
-      "label": "SeriesFlix (series)",
-      "labelEn": "SeriesFlix (series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_sm",
-      "label": "SeriesMetro (series subtituladas)",
-      "labelEn": "SeriesMetro (subbed series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_st",
-      "label": "SeriesTurcas (series turcas)",
-      "labelEn": "SeriesTurcas (Turkish series)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
-    },
-    {
-      "key": "src_lc",
-      "label": "LaCartoons (caricaturas)",
-      "labelEn": "LaCartoons (cartoons)",
-      "type": "select",
-      "default": "on",
-      "options": [
-        {
-          "value": "on",
-          "label": "Activada",
-          "labelEn": "On"
-        },
-        {
-          "value": "off",
-          "label": "Desactivada",
-          "labelEn": "Off"
-        }
-      ]
+      "key": "tmdbKey",
+      "type": "password",
+      "label": "Clave TMDB (opcional)",
+      "hint": "Solo si tu Kino es viejo y no trae TMDB propio."
     }
   ]
 }
