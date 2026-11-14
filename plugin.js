@@ -1332,6 +1332,19 @@ function normTitle(t) {
   return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
 }
 
+// Comparación flexible de títulos para buscar el mismo título en otras fuentes: ignora año, artículo inicial y subtítulo.
+function coreTitle(t) {
+  let x = String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "");
+  x = x.split(/\s*[:\-–—]\s+/)[0].trim();
+  x = x.replace(/^(la|el|los|las|un|una|the)\s+/, "");
+  return x.replace(/[^a-z0-9]+/g, "");
+}
+function sameTitle(a, b) {
+  if (normTitle(a) === normTitle(b)) return true;
+  const x = coreTitle(a);
+  return !!x && x === coreTitle(b);
+}
+
 // Une el mismo título de fuentes distintas en una sola tarjeta (ref "mx|a||b||c").
 function mergeDupes(items) {
   const byKey = new Map();
@@ -1510,10 +1523,11 @@ async function expandRefs(raw) {
       const found = await searchAll(qa, 7000);
       for (const it of found) {
         const src = it.ref.slice(0, 2);
-        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
+        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || !sameTitle(it.title, title)) continue;
         have.add(src);
         refs.push(it.ref);
       }
+      if (!have.has("ac")) log("AllCalidad no coincidió con «" + title + "»; devolvió: " + (found.filter((x) => x.ref.slice(0, 2) === "ac").slice(0, 4).map((x) => x.title).join(" / ") || "nada"));
     }
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
   refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
