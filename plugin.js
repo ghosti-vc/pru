@@ -1557,6 +1557,28 @@ export async function episodes(ref) {
     alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
     return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.join("||") }) : e;
   });
+  // Completar: capítulos que la mejor lista no trae pero otras fuentes sí. Solo de fuentes que coinciden con la mejor
+  // (que comparten casi todos sus capítulos), para no mezclar listas numeradas distinto.
+  const bestKeys = new Set(best.episodes.map((e) => e.season + "x" + e.number));
+  const extra = new Map();
+  res.forEach((r, i) => {
+    if (i === bestI || r.status !== "fulfilled" || !r.value || !r.value.episodes.length) return;
+    const list = r.value.episodes;
+    const common = list.filter((e) => bestKeys.has(e.season + "x" + e.number)).length;
+    if (common < 0.7 * Math.min(list.length, bestKeys.size) || common === 0) return;
+    for (const e of list) {
+      const k = e.season + "x" + e.number;
+      if (bestKeys.has(k)) continue;
+      const x = extra.get(k) || { e, alts: [] };
+      if (x.alts.indexOf(e.ref) < 0) x.alts.push(e.ref);
+      extra.set(k, x);
+    }
+  });
+  extra.forEach((x) => {
+    x.alts.sort((p, q) => (SRC_PRIO[p.slice(0, 2)] || 0) - (SRC_PRIO[q.slice(0, 2)] || 0));
+    eps.push(Object.assign({}, x.e, { ref: x.alts.length > 1 ? "mx|" + x.alts.join("||") : x.alts[0] }));
+  });
+  if (extra.size) log("episodios: completada con " + extra.size + " capítulos de otras fuentes");
   eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
   if (!best.series || !best.series.title) {
     const tt = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").find((x) => x.indexOf("tt:") === 0);
@@ -1611,8 +1633,8 @@ async function verifyMedia(m) {
   } catch (e) { return false; }
 }
 
-// Junta los servidores de TODAS las fuentes y prueba en orden (Latino primero, luego Castellano y Subtitulado)
-// hasta que uno entregue el video.
+// Cada fuente se revisa por su cuenta: en cuanto una entrega sus servidores, estos se empiezan a probar (sin esperar a las
+// demás) y gana el primer video que de verdad abra. Latino primero: si el ganador no es Latino, se esperan 1,5 s por uno mejor.
 export async function resolve(ref) {
   await null;
   const t0 = Date.now();
@@ -1622,87 +1644,97 @@ export async function resolve(ref) {
   refs = onlyOn(refs);
   const total = 17000;
   const left = () => total - (Date.now() - t0);
-
-  // 1) servidores de todas las fuentes, a la vez
-  const got = await Promise.allSettled(refs.map((r) => withTimeout(candidatesOf(r.slice(0, 2), r.slice(3)), 7000)));
-  let cands = [];
-  let lastErr = null;
-  got.forEach((g, i) => {
-    if (g.status === "fulfilled") cands = cands.concat(g.value);
-    else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
-  });
-  cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
-  // Servidores que piden verificación humana o que nunca entregaron video: solo si no hay otros.
   const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
-  const usable = cands.filter((c) => !useless(c));
-  if (usable.length) cands = usable;
-  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
-  log("resolve: " + cands.length + " servidores de " + refs.length + " fuentes");
-
-  // 2) enlaces directos del mejor idioma, sin esperar
-  const minLang = cands.length ? Math.min(...cands.map((c) => c.lang || 0)) : 0;
-  const bd = cands.find((c) => isDirect(c) && (c.lang || 0) === minLang);
-  if (bd) return asDirect(bd);
-
-  // 3) reproductores: se van abriendo de 4 en 4 sin soltar los anteriores; gana el primero que entregue un video
-  //    que de verdad abra. Si a los 4,5 s nadie ha entregado nada, el navegador oculto arranca en paralelo.
-  const embeds = cands.filter((c) => !isDirect(c));
   const BAD = /dood|mixdrop|susanexpect|waaw|hqq|netu|nupload/i;
   const browserOk = typeof kino.browser === "object" && kino.browser && typeof kino.browser.capture === "function";
-  let winner = null;
+  const keyOf = (c) => (c.lang || 0) * 10 + rank(c.url);
+
+  let winner = null; // { v, l, at }
   let fallback = null;
-  let pending = 0;
+  let directLater = null;
+  let lastErr = null;
+  let sourcesPending = refs.length;
+  let running = 0;
   let captureStarted = false;
+  let firstEmbedAt = 0;
+  let junkRun = false;
+  const queue = [];
+  const junk = [];
+  const all = [];
+  const seen = new Set();
   const pendLang = new Map();
+
   const accept = async (v, c) => {
     v.label = c.label;
     const l = c.lang || 0;
-    if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l }; }
+    if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l, at: Date.now() }; }
     else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url))) fallback = v; }
   };
-  const start = (c) => {
-    pending++;
-    pendLang.set(c, c.lang || 0);
-    embedFromHtml(c.url, 0, c.referer || REF).then((v) => (v ? accept(v, c) : null))
-      .catch((e) => log("resolve: " + hostOf(c.url) + " falló " + String((e && e.message) || e).slice(0, 40)))
-      .then(() => { pending--; pendLang.delete(c); });
+  const pump = () => {
+    while (running < 4 && queue.length && left() > 3500 && !(winner && winner.l === 0)) {
+      queue.sort((a, b) => keyOf(a) - keyOf(b));
+      const c = queue.shift();
+      running++;
+      pendLang.set(c, c.lang || 0);
+      if (!firstEmbedAt) firstEmbedAt = Date.now();
+      embedFromHtml(c.url, 0, c.referer || REF).then((v) => (v ? accept(v, c) : null))
+        .catch((e) => log("resolve: " + hostOf(c.url) + " falló " + String((e && e.message) || e).slice(0, 40)))
+        .then(() => { running--; pendLang.delete(c); pump(); });
+    }
+  };
+  const consider = (list, src) => {
+    const fresh = list.filter((c) => c && c.url && !seen.has(c.url));
+    fresh.forEach((c) => seen.add(c.url));
+    log("resolve: " + src + " entregó " + fresh.length + " servidores");
+    for (const c of fresh) {
+      if (useless(c)) { junk.push(c); continue; }
+      if (isDirect(c)) {
+        const l = c.lang || 0;
+        if (!winner || l < winner.l) winner = { v: asDirect(c), l, at: Date.now() };
+        continue;
+      }
+      all.push(c);
+      queue.push(c);
+    }
+    pump();
   };
   const startCapture = () => {
     if (captureStarted || !browserOk || winner) return;
-    const fe = embeds.find((c) => !BAD.test(hostOf(c.url))) || embeds[0];
+    const fe = all.slice().sort((a, b) => keyOf(a) - keyOf(b)).find((c) => !BAD.test(hostOf(c.url))) || all[0];
     if (!fe || left() < 5000) return;
     captureStarted = true;
-    pending++;
+    running++;
     log("resolve: sin video aún, el navegador oculto arranca en paralelo");
     captureEmbed(fe.url, Math.min(12000, left() - 1500))
       .then((s) => (s ? accept(s, fe) : log("resolve: el navegador no vio video")))
       .catch((e) => log("resolve: captura falló " + String((e && e.message) || e).slice(0, 60)))
-      .then(() => { pending--; });
+      .then(() => { running--; });
   };
-  const waitFor = async (ms) => {
-    const end = Date.now() + ms;
-    while (Date.now() < end && pending > 0) {
-      if (winner && !Array.from(pendLang.values()).some((l) => l < winner.l)) return;
-      await kino.sleep(200);
+
+  // 1) cada fuente pide sus servidores por separado
+  refs.forEach((r) => {
+    const src = r.slice(0, 2);
+    withTimeout(candidatesOf(src, r.slice(3)), 7000)
+      .then((list) => consider(list, src), (e) => { lastErr = e; log("resolve: " + src + " sin servidores (" + String((e && e.message) || e).slice(0, 40) + ")"); })
+      .then(() => { sourcesPending--; });
+  });
+
+  // 2) se espera lo justo: gana el primero bueno
+  while (left() > 1500) {
+    if (winner) {
+      if (winner.l === 0) break;
+      if (!Array.from(pendLang.values()).some((l) => l < winner.l) && (sourcesPending === 0 || Date.now() - winner.at > 1500)) break;
+      if (Date.now() - winner.at > 1500) break;
     }
-  };
-  for (let i = 0; i < embeds.length && left() > 4500 && !winner; i += 4) {
-    embeds.slice(i, i + 4).forEach(start);
-    await waitFor(Math.min(3000, left() - 3500));
-    if (!winner) startCapture();
+    if (!winner && !captureStarted && firstEmbedAt && Date.now() - firstEmbedAt > 3000) startCapture();
+    if (sourcesPending === 0 && running === 0 && !queue.length) {
+      if (!winner && junk.length && !junkRun) { junkRun = true; log("resolve: se prueban los servidores dudosos"); junk.forEach((c) => { all.push(c); queue.push(c); }); pump(); continue; }
+      break;
+    }
+    await kino.sleep(120);
   }
-  if (!winner) startCapture();
-  if (!winner && pending > 0 && left() > 1500) await waitFor(Math.max(1500, left() - 2500));
-  if (winner) {
-    if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1500);
-    return winner.v;
-  }
-
-  // 4) enlaces directos de otros idiomas
-  const ld = cands.find(isDirect);
-  if (ld) return asDirect(ld);
-
-  // 5) si ninguno confirmó, se entrega el dudoso (más vale intentar que fallar)
+  if (winner) return winner.v;
+  if (directLater) return asDirect(directLater);
   if (fallback) return fallback;
   throw lastErr && lastErr.code ? lastErr : kino.error("unavailable", "ningún servidor entregó el video", {
     userMessage: tr("Ningún servidor de este título se pudo abrir desde aquí. Prueba otro título.", "No server for this title could be opened from here. Try another title."),
