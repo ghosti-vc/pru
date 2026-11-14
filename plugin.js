@@ -459,31 +459,14 @@ async function hsSearch(q) {
   return ((d.data || {}).posts || []).map((x) => hsItem(x)).filter(Boolean);
 }
 
-function hedge(f) {
-  return new Promise((resolveAll, rejectAll) => {
-    let settled = false;
-    let fails = 0;
-    const run = () => {
-      if (settled) return;
-      Promise.resolve().then(f).then((v) => { if (!settled) { settled = true; resolveAll(v); } }, (e) => {
-        fails++;
-        if (fails >= 3 && !settled) { settled = true; rejectAll(e); }
-      });
-    };
-    run();
-    sleepUpTo(3000).then(run, () => {});
-    sleepUpTo(6000).then(run, () => {});
-  });
-}
-
 async function hsEpisodes(id, slug) {
   const title = stripTags(String(slug || "").replace(/-/g, " "));
-  const first = await hedge(() => getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=1&page=1&postsPerPage=50", HS + "/"));
+  const first = await getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=1&page=1&postsPerPage=50", HS + "/");
   let seasons = (((first.data || {}).seasons) || ["1"]).map((s) => String(s)).filter((s) => /^\d+$/.test(s));
   if (seasons.indexOf("1") < 0) seasons.unshift("1");
   const out = [];
   const one = async (s) => {
-    const d = s === "1" ? first : await hedge(() => getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=" + s + "&page=1&postsPerPage=50", HS + "/"));
+    const d = s === "1" ? first : await getJson(HS_API + "/single/episodes/list?_id=" + id + "&season=" + s + "&page=1&postsPerPage=50", HS + "/");
     for (const e of (d.data || {}).posts || []) {
       const eid = e._id || e.id;
       if (!eid) continue;
@@ -1475,24 +1458,110 @@ async function expandRefs(raw) {
   return { refs: refs.slice(0, 8), kind };
 }
 
+// ---- Lista de capítulos desde TMDB (opcional) ---------------------------------------------------
+// Ajuste "Lista de capítulos": "fuentes" (por defecto, como siempre) o "tmdb". Con TMDB la lista sale rápido y, al dar play,
+// se busca ese capítulo en cada fuente. Si algo falla (sin clave, sin resultados), se usa la forma de siempre.
+function cfg(key) { try { return String(kino.config.get(key) || ""); } catch (e) { return ""; } }
+
+async function tmdbGet(path, key) {
+  const bearer = key.length > 40;
+  const url = "https://api.themoviedb.org/3" + path + (path.indexOf("?") < 0 ? "?" : "&") + "language=es-MX" + (bearer ? "" : "&api_key=" + enc(key));
+  const t = await getText(url, bearer ? { Accept: "application/json", Authorization: "Bearer " + key } : { Accept: "application/json" });
+  return JSON.parse(t);
+}
+
+async function tmdbEpisodes(raw) {
+  if (cfg("epsource") !== "tmdb") return null;
+  const key = cfg("tmdbKey").trim();
+  if (!key) { log("TMDB: falta la clave, se usa la lista de siempre"); return null; }
+  const tt = raw.split("||").find((x) => x.indexOf("tt:") === 0);
+  if (!tt) return null;
+  const tp = tt.split(":");
+  if (tp[2] === "m") return null;
+  const title = dec(tp[1] || "");
+  const t0 = Date.now();
+  const found = await withTimeout(tmdbGet("/search/tv?query=" + enc(title), key), 6000);
+  const results = (found && found.results) || [];
+  const want = normTitle(title);
+  const hit = results.find((r) => normTitle(r.name) === want || normTitle(r.original_name) === want) || results[0];
+  if (!hit) { log("TMDB: sin resultados para el título"); return null; }
+  const det = await withTimeout(tmdbGet("/tv/" + hit.id, key), 6000);
+  const seasons = ((det && det.seasons) || []).filter((x) => x.season_number > 0).slice(0, 20);
+  const got = await Promise.allSettled(seasons.map((x) => withTimeout(tmdbGet("/tv/" + hit.id + "/season/" + x.season_number, key), 7000)));
+  const out = [];
+  let abs = 0;
+  got.forEach((g, i) => {
+    if (g.status !== "fulfilled") { log("TMDB: falló la temporada " + seasons[i].season_number); return; }
+    for (const e of g.value.episodes || []) {
+      abs++;
+      const n = Number(e.episode_number) || 0;
+      if (!n) continue;
+      out.push({ season: seasons[i].season_number, number: n, ref: "tm|" + enc(title) + "|" + seasons[i].season_number + "|" + n + "|" + abs + "|" + enc(raw), title: e.name || (tr("Episodio ", "Episode ") + n), poster: tmdbPoster(e.still_path) });
+    }
+  });
+  if (!out.length) { log("TMDB: sin capítulos"); return null; }
+  log("TMDB: " + out.length + " capítulos en " + (Date.now() - t0) + "ms");
+  out.sort((a, b) => (a.season - b.season) || (a.number - b.number));
+  return { series: { title: stripTags(det.name) || title }, episodes: out };
+}
+
+const epCache = new Map();
+function episodesCached(r) {
+  const hit = epCache.get(r);
+  if (hit && hit.at + 300000 > Date.now()) return hit.p;
+  const p = episodesOne(r);
+  epCache.set(r, { at: Date.now(), p });
+  p.catch(() => { if (epCache.get(r) && epCache.get(r).p === p) epCache.delete(r); });
+  return p;
+}
+
+// Convierte un capítulo "tm|..." (de TMDB) en el capítulo equivalente de cada fuente: "mx|ref1||ref2...".
+async function tmdbToMx(ref) {
+  const p = String(ref).split("|");
+  const season = Number(p[2]);
+  const num = Number(p[3]);
+  const abs = Number(p[4]);
+  const raw = dec(p[5] || "");
+  const { refs } = await expandRefs(raw);
+  const t0 = Date.now();
+  const alts = [];
+  const tasks = refs.map((r) => withTimeout(episodesCached(r), 9000).then((v) => {
+    const list = (v && v.episodes) || [];
+    let e = list.find((x) => x.season === season && x.number === num);
+    if (!e) {
+      const seasonsSeen = new Set(list.map((x) => x.season));
+      if (seasonsSeen.size === 1 && abs > 0) e = list.slice().sort((a, b) => a.number - b.number)[abs - 1];
+    }
+    if (e && e.ref && alts.indexOf(e.ref) < 0) alts.push(e.ref);
+  }, () => {}));
+  let done = 0;
+  tasks.forEach((t) => t.then(() => { done++; }));
+  let firstAt = 0;
+  while (done < tasks.length && Date.now() - t0 < 9500) {
+    if (alts.length && !firstAt) firstAt = Date.now();
+    if (firstAt && Date.now() - firstAt > 2000) break;
+    await kino.sleep(150);
+  }
+  log("TMDB: capítulo " + season + "x" + num + " en " + alts.length + " fuentes (" + (Date.now() - t0) + "ms)");
+  if (!alts.length) throw kino.error("not_found", "capítulo no encontrado", { userMessage: tr("No se encontró este capítulo en las fuentes.", "This episode was not found in the sources.") });
+  alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
+  return "mx|" + alts.join("||");
+}
+
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
-  const tAll = Date.now();
+  try {
+    const viaTmdb = await tmdbEpisodes(raw);
+    if (viaTmdb) return viaTmdb;
+  } catch (e) { log("TMDB: falló (" + String((e && e.message) || e).slice(0, 50) + "), se usa la lista de siempre"); }
   const { refs, kind } = await expandRefs(raw);
-  log("tiempo: buscar otras fuentes " + (Date.now() - tAll) + "ms");
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   // Película: un solo capítulo que recuerda todas las fuentes.
   if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
     return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
   }
-  const res = await Promise.allSettled(refs.map((r) => {
-    const t1 = Date.now();
-    const p = withTimeout(episodesOne(r), 14000);
-    p.then(() => log("tiempo: capítulos " + r.slice(0, 2) + " " + (Date.now() - t1) + "ms"), () => log("tiempo: capítulos " + r.slice(0, 2) + " falló a los " + (Date.now() - t1) + "ms"));
-    return p;
-  }));
-  log("tiempo: total capítulos " + (Date.now() - tAll) + "ms");
+  const res = await Promise.allSettled(refs.map((r) => withTimeout(episodesOne(r), 14000)));
   let best = null;
   let bestI = -1;
   res.forEach((r, i) => {
@@ -1550,39 +1619,13 @@ const isDirect = (c) => /\.(m3u8|mp4)(\?|$)/i.test(c.url) && !isDemo(c.url);
 const asDirect = (c) => ({ url: c.url, mime: /\.m3u8/i.test(c.url) ? "application/x-mpegurl" : "video/mp4", label: c.label, headers: playHeaders(c.referer || REF) });
 
 // Un video HLS solo vale si su lista de reproducción abre de verdad (hay servidores que entregan enlaces que luego fallan).
-const deadHost = {};
-const baseHost = (u) => hostOf(u).split(".").slice(-2).join(".").toLowerCase();
-const isDead = (u) => (deadHost[baseHost(u)] || 0) > Date.now();
-
 async function verifyMedia(m) {
   if (!/mpegurl/i.test(String(m && m.mime))) return true;
-  const probe = async (h) => {
-    const r = await withTimeout(kino.fetch(m.url, { headers: h }), 4500);
-    if (!r.ok) return r.status;
-    const t = await r.text();
-    return /#EXTM3U/.test(String(t).slice(0, 400)) ? 200 : 0;
-  };
   try {
-    const st = await probe(m.headers || {});
-    if (st === 200) return true;
-    if (st !== 403) return false;
-    // 403: se prueban otras cabeceras a la vez (algunos servidores piden otro origen o ninguno).
-    const ref = String((m.headers && m.headers.Referer) || "");
-    const root = (/^(https?:\/\/[^\/?#]+)/i.exec(ref) || [])[1] || "";
-    const self = (/^(https?:\/\/[^\/?#]+)/i.exec(m.url) || [])[1] || "";
-    const variants = [
-      { Referer: root + "/", "User-Agent": UA },
-      { "User-Agent": UA },
-      { Referer: root + "/", Origin: root, "User-Agent": UA, Accept: "*/*", "Accept-Language": "es-MX,es;q=0.9" },
-      { Referer: self + "/", Origin: self, "User-Agent": UA },
-    ];
-    const rs = await Promise.allSettled(variants.map((h) => probe(h)));
-    const codes = rs.map((r) => (r.status === "fulfilled" ? r.value : "x"));
-    const ok = codes.indexOf(200);
-    log("resolve: 403 en " + hostOf(m.url) + ", otras cabeceras: " + codes.join(","));
-    if (ok >= 0) { m.headers = variants[ok]; return true; }
-    deadHost[baseHost(m.url)] = Date.now() + 20 * 60 * 1000;
-    return false;
+    const r = await withTimeout(kino.fetch(m.url, { headers: m.headers || {} }), 4500);
+    if (!r.ok) return false;
+    const t = await r.text();
+    return /#EXTM3U/.test(String(t).slice(0, 400));
   } catch (e) { return false; }
 }
 
@@ -1590,6 +1633,7 @@ async function verifyMedia(m) {
 // hasta que uno entregue el video.
 export async function resolve(ref) {
   await null;
+  if (String(ref || "").indexOf("tm|") === 0) ref = await tmdbToMx(ref);
   const t0 = Date.now();
   const raw = String(ref || "");
   const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
@@ -1606,12 +1650,6 @@ export async function resolve(ref) {
     else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
   });
   cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
-  const before = cands.length;
-  cands = cands.filter((c) => !isDead(c.url));
-  if (before && !cands.length) {
-    log("resolve: los servidores de este título dieron 403 hace poco, se omiten");
-    throw kino.error("unavailable", "servidores sin acceso", { userMessage: tr("Los servidores de este título no abren desde aquí. Prueba otro título u otra fuente.", "This title's servers do not open from here. Try another title.") });
-  }
   // Servidores que piden verificación humana o que nunca entregaron video: solo si no hay otros.
   const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
@@ -1638,7 +1676,7 @@ export async function resolve(ref) {
     v.label = c.label;
     const l = c.lang || 0;
     if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l }; }
-    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url)) && !isDead(c.url)) fallback = v; }
+    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url))) fallback = v; }
   };
   const start = (c) => {
     pending++;
@@ -1649,7 +1687,7 @@ export async function resolve(ref) {
   };
   const startCapture = () => {
     if (captureStarted || !browserOk || winner) return;
-    const fe = embeds.find((c) => !BAD.test(hostOf(c.url)) && !isDead(c.url)) || embeds.find((c) => !isDead(c.url));
+    const fe = embeds.find((c) => !BAD.test(hostOf(c.url))) || embeds[0];
     if (!fe || left() < 5000) return;
     captureStarted = true;
     pending++;
