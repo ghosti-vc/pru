@@ -1265,11 +1265,11 @@ function acImg(o) {
   return p.indexOf("/wp-content/") === 0 ? AC + p : AC_IMG + p;
 }
 
-function acItem(o, hintType) {
+function acItem(o) {
   if (!o) return null;
   const id = String(o._id || o.id || "");
   if (!id) return null;
-  const type = String(o.type || hintType || "movies");
+  const type = String(o.type || "movies");
   const kind = type === "movies" ? "movie" : type === "animes" ? "anime" : "series";
   const ym = /^(\d{4})/.exec(String(o.release_date || "")) || /\((\d{4})\)/.exec(String(o.title || ""));
   const title = String(o.title || o.name || "").replace(/\s*\(\d{4}\)\s*$/, "");
@@ -1280,30 +1280,6 @@ async function acSearch(q) {
   const d = await getJson(AC_API + "/search?query=" + enc(q) + "&post_type=movies,tvshows,animes", AC + "/");
   const posts = (d && d.data && d.data.posts) || [];
   return posts.map(acItem).filter(Boolean);
-}
-
-// Respaldo: la búsqueda de la API a veces no devuelve el título. Se prueban variantes del nombre y los listados recientes.
-async function acLookup(title, kind) {
-  const core = String(title || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/^\s*(la|el|los|las|un|una)\s+/i, "").replace(/\s+/g, " ").trim();
-  const words = core.split(" ").filter(Boolean);
-  const queries = [];
-  if (core) queries.push(core);
-  if (words.length > 2) queries.push(words.slice(0, 2).join(" "));
-  const types = kind === "m" ? ["movies"] : ["tvshows", "animes"];
-  const jobs = queries.map((q) => acSearch(q));
-  for (const t of types) {
-    for (let pg = 1; pg <= 3; pg++) {
-      jobs.push(getJson(AC_API + "/listing?page=" + pg + "&post_type=" + t + "&posts_per_page=24", AC + "/")
-        .then((d) => ((d && d.data && d.data.posts) || []).map((x) => acItem(x, t)).filter(Boolean)));
-    }
-  }
-  const res = await Promise.allSettled(jobs);
-  for (const r of res) {
-    if (r.status !== "fulfilled") continue;
-    const hit = r.value.find((it) => (it.kind === "movie") === (kind === "m") && sameTitle(it.title, title));
-    if (hit) return hit;
-  }
-  return null;
 }
 
 async function acEpisodes(id) {
@@ -1330,7 +1306,7 @@ async function acCandidates(spec) {
     if (!u) continue;
     const l = String(e.lang || "");
     const lang = /sub|vose/i.test(l) ? 2 : /cast/i.test(l) ? 1 : 0;
-    out.push({ url: u, label: "AllCalidad · " + (e.quality || "HD") + (l ? " · " + l : ""), referer: AC + "/", lang, first: true });
+    out.push({ url: u, label: "AllCalidad · " + (e.quality || "HD") + (l ? " · " + l : ""), referer: AC + "/", lang });
   }
   log("AllCalidad servidores: " + out.map((x) => hostOf(x.url)).join(","));
   return out;
@@ -1350,23 +1326,10 @@ const SECTIONS = {
   "valoradas-series": { genre: "series", parts: [() => (n) => pjRatedPage("series", n)] },
 };
 
-const SRC_PRIO = { ac: -1, pj: 0, hs: 1, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
+const SRC_PRIO = { pj: 0, hs: 1, ac: 2, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
 
 function normTitle(t) {
   return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
-}
-
-// Comparación flexible de títulos para buscar el mismo título en otras fuentes: ignora año, artículo inicial y subtítulo.
-function coreTitle(t) {
-  let x = String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "");
-  x = x.split(/\s*[:\-–—]\s+/)[0].trim();
-  x = x.replace(/^(la|el|los|las|un|una|the)\s+/, "");
-  return x.replace(/[^a-z0-9]+/g, "");
-}
-function sameTitle(a, b) {
-  if (normTitle(a) === normTitle(b)) return true;
-  const x = coreTitle(a);
-  return !!x && x === coreTitle(b);
 }
 
 // Une el mismo título de fuentes distintas en una sola tarjeta (ref "mx|a||b||c").
@@ -1547,17 +1510,9 @@ async function expandRefs(raw) {
       const found = await searchAll(qa, 7000);
       for (const it of found) {
         const src = it.ref.slice(0, 2);
-        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || !sameTitle(it.title, title)) continue;
+        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
         have.add(src);
         refs.push(it.ref);
-      }
-      if (!have.has("ac")) {
-        log("AllCalidad no coincidió con «" + title + "»; devolvió: " + (found.filter((x) => x.ref.slice(0, 2) === "ac").slice(0, 4).map((x) => x.title).join(" / ") || "nada"));
-        try {
-          const alt = await withTimeout(acLookup(title, kind), 7000);
-          if (alt) { have.add("ac"); refs.push(alt.ref); log("AllCalidad: encontrada con la búsqueda alterna (" + alt.title + ")"); }
-          else log("AllCalidad: tampoco apareció en la búsqueda alterna");
-        } catch (e) { log("AllCalidad: búsqueda alterna falló " + String((e && e.message) || e).slice(0, 40)); }
       }
     }
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
@@ -1589,21 +1544,7 @@ export async function episodes(ref) {
     if (r.status === "fulfilled" && r.value) for (const e of r.value.episodes) m.set(e.season + "x" + e.number, e.ref);
     return m;
   });
-  // Capítulos que faltan en la lista principal pero otra fuente sí tiene (solo fuentes con las mismas temporadas, para no mezclar numeraciones).
-  const seasonsOf = (d) => Array.from(new Set(d.episodes.map((e) => e.season))).sort((a, b) => a - b).join(",");
-  const baseSeasons = seasonsOf(best);
-  const haveKeys = new Set(best.episodes.map((e) => e.season + "x" + e.number));
-  const extra = [];
-  res.forEach((r, i) => {
-    if (i === bestI || r.status !== "fulfilled" || !r.value || !r.value.episodes.length) return;
-    if (seasonsOf(r.value) !== baseSeasons) return;
-    for (const e of r.value.episodes) {
-      const k = e.season + "x" + e.number;
-      if (!haveKeys.has(k)) { haveKeys.add(k); extra.push(e); }
-    }
-  });
-  if (extra.length) log("episodios: " + extra.length + " capítulos extra de otras fuentes");
-  const eps = best.episodes.concat(extra).map((e) => {
+  const eps = best.episodes.map((e) => {
     const alts = [e.ref];
     byKey.forEach((m, i) => { if (i !== bestI) { const o = m.get(e.season + "x" + e.number); if (o && alts.indexOf(o) < 0) alts.push(o); } });
     alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
@@ -1687,8 +1628,7 @@ export async function resolve(ref) {
   const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
   if (usable.length) cands = usable;
-  // Los servidores de AllCalidad se prueban primero; después van los demás (idioma y luego servidor).
-  cands.sort((a, b) => ((b.first ? 1 : 0) - (a.first ? 1 : 0)) || (((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url))));
+  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
   log("resolve: " + cands.length + " servidores de " + refs.length + " fuentes");
 
   // 2) enlaces directos del mejor idioma, sin esperar
