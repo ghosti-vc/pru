@@ -1315,16 +1315,21 @@ async function acCandidates(spec) {
 // ---- Secciones ----------------------------------------------------------------------------------
 
 const SECTIONS = {
-  peliculas: { genre: "peliculas", parts: [() => (n) => pjPage("movie", n), () => (n) => hsPage("movie", n)] },
-  series: { genre: "series", parts: [() => (n) => pjPage("series", n), () => (n) => hsPage("series", n)] },
-  turcas: { genre: "series", parts: [() => (n) => stPage(n)] },
-  toons: { genre: "series", parts: [() => (n) => lcPage(n)] },
-  anime: { genre: "series", parts: [() => (n) => pjPage("anime", n), () => (n) => hsPage("anime", n)] },
-  "estrenos-peliculas": { genre: "peliculas", parts: [() => (n) => pjNewPage("movie", n), () => (n) => hsNewPage("movie", n)] },
-  "estrenos-series": { genre: "series", parts: [() => (n) => pjNewPage("series", n), () => (n) => hsNewPage("series", n)] },
-  "valoradas-peliculas": { genre: "peliculas", parts: [() => (n) => pjRatedPage("movie", n)] },
-  "valoradas-series": { genre: "series", parts: [() => (n) => pjRatedPage("series", n)] },
+  peliculas: { srcs: ["pj", "hs"], genre: "peliculas", parts: [() => (n) => pjPage("movie", n), () => (n) => hsPage("movie", n)] },
+  series: { srcs: ["pj", "hs"], genre: "series", parts: [() => (n) => pjPage("series", n), () => (n) => hsPage("series", n)] },
+  turcas: { srcs: ["st"], genre: "series", parts: [() => (n) => stPage(n)] },
+  toons: { srcs: ["lc"], genre: "series", parts: [() => (n) => lcPage(n)] },
+  anime: { srcs: ["pj", "hs"], genre: "series", parts: [() => (n) => pjPage("anime", n), () => (n) => hsPage("anime", n)] },
+  "estrenos-peliculas": { srcs: ["pj", "hs"], genre: "peliculas", parts: [() => (n) => pjNewPage("movie", n), () => (n) => hsNewPage("movie", n)] },
+  "estrenos-series": { srcs: ["pj", "hs"], genre: "series", parts: [() => (n) => pjNewPage("series", n), () => (n) => hsNewPage("series", n)] },
+  "valoradas-peliculas": { srcs: ["pj"], genre: "peliculas", parts: [() => (n) => pjRatedPage("movie", n)] },
+  "valoradas-series": { srcs: ["pj"], genre: "series", parts: [() => (n) => pjRatedPage("series", n)] },
 };
+
+// Fuentes que la persona deja activadas en los ajustes (todas activadas por defecto).
+function srcOn(id) { try { return String(kino.config.get("src_" + id) || "on") !== "off"; } catch (e) { return true; } }
+// Quita las referencias de fuentes desactivadas; si no quedara ninguna, se dejan todas (mejor eso que un error).
+function onlyOn(refs) { const on = refs.filter((r) => srcOn(r.slice(0, 2))); return on.length ? on : refs; }
 
 const SRC_PRIO = { pj: 0, hs: 1, ac: 2, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
 
@@ -1359,7 +1364,9 @@ function mergeDupes(items) {
 async function sectionPage(sec, n) {
   const def = SECTIONS[sec];
   if (!def) throw kino.error("not_found", "catálogo desconocido");
-  const res = await Promise.allSettled(def.parts.map((p) => p()(n)));
+  const active = def.parts.map((p, i) => ({ p, src: (def.srcs || [])[i] })).filter((x) => !x.src || srcOn(x.src));
+  if (!active.length) throw kino.error("unavailable", "fuentes desactivadas", { userMessage: tr("Las fuentes de este catálogo están desactivadas en los ajustes.", "This catalog's sources are turned off in the settings.") });
+  const res = await Promise.allSettled(active.map((x) => x.p()(n)));
   const lists = [];
   let hasNext = false;
   let ok = 0;
@@ -1444,7 +1451,7 @@ export async function categories() {
 const deadUntil = {};
 async function searchAll(qa, ms) {
   const jobs = [["pj", pjSearch], ["hs", hsSearch], ["po", (q) => nxSearch("po", q)], ["cu", (q) => nxSearch("cu", q)], ["cc", ccSearch], ["sm", smSearch], ["sf", sfSearch], ["ph", phSearch], ["lc", lcSearch], ["st", stSearch], ["pp", ppSearch], ["ac", acSearch]]
-    .filter(([n]) => !(deadUntil[n] > Date.now()));
+    .filter(([n]) => srcOn(n) && !(deadUntil[n] > Date.now()));
   const res = await Promise.allSettled(jobs.map(([, f]) => withTimeout(f(qa), Math.min(ms || 9000, 7000))));
   const all = [];
   res.forEach((r, i) => {
@@ -1498,7 +1505,7 @@ async function expandRefs(raw) {
   const parts = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter(Boolean);
   const refs = parts.filter((x) => x.indexOf("tt:") !== 0);
   const tt = parts.find((x) => x.indexOf("tt:") === 0);
-  if (!tt) return { refs, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
+  if (!tt) return { refs: onlyOn(refs), kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
   const tp = tt.split(":");
   const title = dec(tp[1] || "");
   const kind = tp[2] === "m" ? "m" : "s";
@@ -1518,7 +1525,7 @@ async function expandRefs(raw) {
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
   refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
   log("fuentes para este título: " + refs.map((r) => r.slice(0, 2)).join(","));
-  return { refs: refs.slice(0, 8), kind };
+  return { refs: onlyOn(refs).slice(0, 8), kind };
 }
 
 export async function episodes(ref) {
@@ -1610,8 +1617,9 @@ export async function resolve(ref) {
   await null;
   const t0 = Date.now();
   const raw = String(ref || "");
-  const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
+  let refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
+  refs = onlyOn(refs);
   const total = 17000;
   const left = () => total - (Date.now() - t0);
 
