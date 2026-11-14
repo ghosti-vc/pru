@@ -1250,6 +1250,68 @@ async function pjRatedPage(kind, n) {
   return { items: raw.map((x) => pjItem(x, kind)).filter(Boolean), hasNext: c.hasNext };
 }
 
+// ---- AllCalidad (ac) ----
+// ref: ac|<m|s|a>|<id>   episodio: ac|e|<id del episodio>
+const AC = "https://allcalidad.re";
+const AC_API = AC + "/api/rest";
+const AC_IMG = AC + "/wp-content/uploads";
+
+function acImg(o) {
+  const im = (o && o.images) || {};
+  let p = String(im.poster || im.backdrop || im.still || o.still_path || "");
+  if (!p) return undefined;
+  if (/^https?:\/\//i.test(p)) return p;
+  if (p.indexOf("/") !== 0) p = "/" + p;
+  return p.indexOf("/wp-content/") === 0 ? AC + p : AC_IMG + p;
+}
+
+function acItem(o) {
+  if (!o) return null;
+  const id = String(o._id || o.id || "");
+  if (!id) return null;
+  const type = String(o.type || "movies");
+  const kind = type === "movies" ? "movie" : type === "animes" ? "anime" : "series";
+  const ym = /^(\d{4})/.exec(String(o.release_date || "")) || /\((\d{4})\)/.exec(String(o.title || ""));
+  const title = String(o.title || o.name || "").replace(/\s*\(\d{4}\)\s*$/, "");
+  return mkItem("ac", kind, id, title, acImg(o), ym ? ym[1] : "");
+}
+
+async function acSearch(q) {
+  const d = await getJson(AC_API + "/search?query=" + enc(q) + "&post_type=movies,tvshows,animes", AC + "/");
+  const posts = (d && d.data && d.data.posts) || [];
+  return posts.map(acItem).filter(Boolean);
+}
+
+async function acEpisodes(id) {
+  const d = await getJson(AC_API + "/episodes?post_id=" + enc(id), AC + "/");
+  const data = Array.isArray(d && d.data) ? d.data : [];
+  const out = [];
+  for (const e of data) {
+    const eid = e && (e._id || e.id);
+    if (!eid) continue;
+    const season = parseInt(e.season_number, 10) || 1;
+    const num = parseInt(e.episode_number, 10) || out.length + 1;
+    out.push({ season, number: num, ref: "ac|e|" + eid, title: stripTags(e.title) || tr("Episodio ", "Episode ") + num, poster: acImg(e) });
+  }
+  log("AllCalidad episodios: " + out.length);
+  return { series: { title: "" }, episodes: out };
+}
+
+async function acCandidates(spec) {
+  const id = spec.split("|")[1];
+  const d = await getJson(AC_API + "/player?post_id=" + enc(id) + "&_any=1", AC + "/");
+  const out = [];
+  for (const e of (d && d.data && d.data.embeds) || []) {
+    const u = absUrl(e && e.url);
+    if (!u) continue;
+    const l = String(e.lang || "");
+    const lang = /sub|vose/i.test(l) ? 2 : /cast/i.test(l) ? 1 : 0;
+    out.push({ url: u, label: "AllCalidad · " + (e.quality || "HD") + (l ? " · " + l : ""), referer: AC + "/", lang });
+  }
+  log("AllCalidad servidores: " + out.map((x) => hostOf(x.url)).join(","));
+  return out;
+}
+
 // ---- Secciones ----------------------------------------------------------------------------------
 
 const SECTIONS = {
@@ -1264,7 +1326,7 @@ const SECTIONS = {
   "valoradas-series": { genre: "series", parts: [() => (n) => pjRatedPage("series", n)] },
 };
 
-const SRC_PRIO = { pj: 0, hs: 1, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
+const SRC_PRIO = { pj: 0, hs: 1, ac: 2, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
 
 function normTitle(t) {
   return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
@@ -1381,7 +1443,7 @@ export async function categories() {
 // Todas las búsquedas a la vez (sin unir): se usa en el buscador y para encontrar el mismo título en otras fuentes.
 const deadUntil = {};
 async function searchAll(qa, ms) {
-  const jobs = [["pj", pjSearch], ["hs", hsSearch], ["po", (q) => nxSearch("po", q)], ["cu", (q) => nxSearch("cu", q)], ["cc", ccSearch], ["sm", smSearch], ["sf", sfSearch], ["ph", phSearch], ["lc", lcSearch], ["st", stSearch], ["pp", ppSearch]]
+  const jobs = [["pj", pjSearch], ["hs", hsSearch], ["po", (q) => nxSearch("po", q)], ["cu", (q) => nxSearch("cu", q)], ["cc", ccSearch], ["sm", smSearch], ["sf", sfSearch], ["ph", phSearch], ["lc", lcSearch], ["st", stSearch], ["pp", ppSearch], ["ac", acSearch]]
     .filter(([n]) => !(deadUntil[n] > Date.now()));
   const res = await Promise.allSettled(jobs.map(([, f]) => withTimeout(f(qa), Math.min(ms || 9000, 7000))));
   const all = [];
@@ -1427,6 +1489,7 @@ async function episodesOne(raw) {
   if (src === "sf") return sfEpisodes(dec(p[2]));
   if (src === "lc") return lcEpisodes(dec(p[2]));
   if (src === "st") return stEpisodes(dec(p[2]));
+  if (src === "ac") return acEpisodes(p[2]);
   throw kino.error("not_found", "referencia desconocida");
 }
 
@@ -1458,103 +1521,9 @@ async function expandRefs(raw) {
   return { refs: refs.slice(0, 8), kind };
 }
 
-// ---- Lista de capítulos desde TMDB (opcional) ---------------------------------------------------
-// Ajuste "Lista de capítulos": "fuentes" (por defecto, como siempre) o "tmdb". Con TMDB la lista sale rápido y, al dar play,
-// se busca ese capítulo en cada fuente. Si algo falla (sin clave, sin resultados), se usa la forma de siempre.
-function cfg(key) { try { return String(kino.config.get(key) || ""); } catch (e) { return ""; } }
-
-async function tmdbGet(path, key) {
-  const bearer = key.length > 40;
-  const url = "https://api.themoviedb.org/3" + path + (path.indexOf("?") < 0 ? "?" : "&") + "language=es-MX" + (bearer ? "" : "&api_key=" + enc(key));
-  const t = await getText(url, bearer ? { Accept: "application/json", Authorization: "Bearer " + key } : { Accept: "application/json" });
-  return JSON.parse(t);
-}
-
-async function tmdbEpisodes(raw) {
-  if (cfg("epsource") !== "tmdb") return null;
-  const key = cfg("tmdbKey").trim();
-  if (!key) { log("TMDB: falta la clave, se usa la lista de siempre"); return null; }
-  const tt = raw.split("||").find((x) => x.indexOf("tt:") === 0);
-  if (!tt) return null;
-  const tp = tt.split(":");
-  if (tp[2] === "m") return null;
-  const title = dec(tp[1] || "");
-  const t0 = Date.now();
-  const found = await withTimeout(tmdbGet("/search/tv?query=" + enc(title), key), 6000);
-  const results = (found && found.results) || [];
-  const want = normTitle(title);
-  const hit = results.find((r) => normTitle(r.name) === want || normTitle(r.original_name) === want) || results[0];
-  if (!hit) { log("TMDB: sin resultados para el título"); return null; }
-  const det = await withTimeout(tmdbGet("/tv/" + hit.id, key), 6000);
-  const seasons = ((det && det.seasons) || []).filter((x) => x.season_number > 0).slice(0, 20);
-  const got = await Promise.allSettled(seasons.map((x) => withTimeout(tmdbGet("/tv/" + hit.id + "/season/" + x.season_number, key), 7000)));
-  const out = [];
-  let abs = 0;
-  got.forEach((g, i) => {
-    if (g.status !== "fulfilled") { log("TMDB: falló la temporada " + seasons[i].season_number); return; }
-    for (const e of g.value.episodes || []) {
-      abs++;
-      const n = Number(e.episode_number) || 0;
-      if (!n) continue;
-      out.push({ season: seasons[i].season_number, number: n, ref: "tm|" + enc(title) + "|" + seasons[i].season_number + "|" + n + "|" + abs + "|" + enc(raw), title: e.name || (tr("Episodio ", "Episode ") + n), poster: tmdbPoster(e.still_path) });
-    }
-  });
-  if (!out.length) { log("TMDB: sin capítulos"); return null; }
-  log("TMDB: " + out.length + " capítulos en " + (Date.now() - t0) + "ms");
-  out.sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  return { series: { title: stripTags(det.name) || title }, episodes: out };
-}
-
-const epCache = new Map();
-function episodesCached(r) {
-  const hit = epCache.get(r);
-  if (hit && hit.at + 300000 > Date.now()) return hit.p;
-  const p = episodesOne(r);
-  epCache.set(r, { at: Date.now(), p });
-  p.catch(() => { if (epCache.get(r) && epCache.get(r).p === p) epCache.delete(r); });
-  return p;
-}
-
-// Convierte un capítulo "tm|..." (de TMDB) en el capítulo equivalente de cada fuente: "mx|ref1||ref2...".
-async function tmdbToMx(ref) {
-  const p = String(ref).split("|");
-  const season = Number(p[2]);
-  const num = Number(p[3]);
-  const abs = Number(p[4]);
-  const raw = dec(p[5] || "");
-  const { refs } = await expandRefs(raw);
-  const t0 = Date.now();
-  const alts = [];
-  const tasks = refs.map((r) => withTimeout(episodesCached(r), 9000).then((v) => {
-    const list = (v && v.episodes) || [];
-    let e = list.find((x) => x.season === season && x.number === num);
-    if (!e) {
-      const seasonsSeen = new Set(list.map((x) => x.season));
-      if (seasonsSeen.size === 1 && abs > 0) e = list.slice().sort((a, b) => a.number - b.number)[abs - 1];
-    }
-    if (e && e.ref && alts.indexOf(e.ref) < 0) alts.push(e.ref);
-  }, () => {}));
-  let done = 0;
-  tasks.forEach((t) => t.then(() => { done++; }));
-  let firstAt = 0;
-  while (done < tasks.length && Date.now() - t0 < 9500) {
-    if (alts.length && !firstAt) firstAt = Date.now();
-    if (firstAt && Date.now() - firstAt > 2000) break;
-    await kino.sleep(150);
-  }
-  log("TMDB: capítulo " + season + "x" + num + " en " + alts.length + " fuentes (" + (Date.now() - t0) + "ms)");
-  if (!alts.length) throw kino.error("not_found", "capítulo no encontrado", { userMessage: tr("No se encontró este capítulo en las fuentes.", "This episode was not found in the sources.") });
-  alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
-  return "mx|" + alts.join("||");
-}
-
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
-  try {
-    const viaTmdb = await tmdbEpisodes(raw);
-    if (viaTmdb) return viaTmdb;
-  } catch (e) { log("TMDB: falló (" + String((e && e.message) || e).slice(0, 50) + "), se usa la lista de siempre"); }
   const { refs, kind } = await expandRefs(raw);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   // Película: un solo capítulo que recuerda todas las fuentes.
@@ -1582,6 +1551,11 @@ export async function episodes(ref) {
     return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.join("||") }) : e;
   });
   eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
+  if (!best.series || !best.series.title) {
+    const tt = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").find((x) => x.indexOf("tt:") === 0);
+    const t = tt ? dec(tt.split(":")[1] || "") : "";
+    if (t) best = Object.assign({}, best, { series: Object.assign({}, best.series, { title: t }) });
+  }
   return Object.assign({}, best, { episodes: eps });
 }
 
@@ -1606,6 +1580,7 @@ async function candidatesOf(src, spec) {
   if (src === "ph") return phCandidates(arg());
   if (src === "lc") return lcCandidates(arg());
   if (src === "st") return stCandidates(arg());
+  if (src === "ac") return acCandidates(spec);
   throw kino.error("not_found", "referencia desconocida");
 }
 
@@ -1633,7 +1608,6 @@ async function verifyMedia(m) {
 // hasta que uno entregue el video.
 export async function resolve(ref) {
   await null;
-  if (String(ref || "").indexOf("tm|") === 0) ref = await tmdbToMx(ref);
   const t0 = Date.now();
   const raw = String(ref || "");
   const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
