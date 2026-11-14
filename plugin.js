@@ -1265,11 +1265,11 @@ function acImg(o) {
   return p.indexOf("/wp-content/") === 0 ? AC + p : AC_IMG + p;
 }
 
-function acItem(o) {
+function acItem(o, hintType) {
   if (!o) return null;
   const id = String(o._id || o.id || "");
   if (!id) return null;
-  const type = String(o.type || "movies");
+  const type = String(o.type || hintType || "movies");
   const kind = type === "movies" ? "movie" : type === "animes" ? "anime" : "series";
   const ym = /^(\d{4})/.exec(String(o.release_date || "")) || /\((\d{4})\)/.exec(String(o.title || ""));
   const title = String(o.title || o.name || "").replace(/\s*\(\d{4}\)\s*$/, "");
@@ -1280,6 +1280,30 @@ async function acSearch(q) {
   const d = await getJson(AC_API + "/search?query=" + enc(q) + "&post_type=movies,tvshows,animes", AC + "/");
   const posts = (d && d.data && d.data.posts) || [];
   return posts.map(acItem).filter(Boolean);
+}
+
+// Respaldo: la búsqueda de la API a veces no devuelve el título. Se prueban variantes del nombre y los listados recientes.
+async function acLookup(title, kind) {
+  const core = String(title || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/^\s*(la|el|los|las|un|una)\s+/i, "").replace(/\s+/g, " ").trim();
+  const words = core.split(" ").filter(Boolean);
+  const queries = [];
+  if (core) queries.push(core);
+  if (words.length > 2) queries.push(words.slice(0, 2).join(" "));
+  const types = kind === "m" ? ["movies"] : ["tvshows", "animes"];
+  const jobs = queries.map((q) => acSearch(q));
+  for (const t of types) {
+    for (let pg = 1; pg <= 3; pg++) {
+      jobs.push(getJson(AC_API + "/listing?page=" + pg + "&post_type=" + t + "&posts_per_page=24", AC + "/")
+        .then((d) => ((d && d.data && d.data.posts) || []).map((x) => acItem(x, t)).filter(Boolean)));
+    }
+  }
+  const res = await Promise.allSettled(jobs);
+  for (const r of res) {
+    if (r.status !== "fulfilled") continue;
+    const hit = r.value.find((it) => (it.kind === "movie") === (kind === "m") && sameTitle(it.title, title));
+    if (hit) return hit;
+  }
+  return null;
 }
 
 async function acEpisodes(id) {
@@ -1306,7 +1330,7 @@ async function acCandidates(spec) {
     if (!u) continue;
     const l = String(e.lang || "");
     const lang = /sub|vose/i.test(l) ? 2 : /cast/i.test(l) ? 1 : 0;
-    out.push({ url: u, label: "AllCalidad · " + (e.quality || "HD") + (l ? " · " + l : ""), referer: AC + "/", lang });
+    out.push({ url: u, label: "AllCalidad · " + (e.quality || "HD") + (l ? " · " + l : ""), referer: AC + "/", lang, first: true });
   }
   log("AllCalidad servidores: " + out.map((x) => hostOf(x.url)).join(","));
   return out;
@@ -1527,7 +1551,14 @@ async function expandRefs(raw) {
         have.add(src);
         refs.push(it.ref);
       }
-      if (!have.has("ac")) log("AllCalidad no coincidió con «" + title + "»; devolvió: " + (found.filter((x) => x.ref.slice(0, 2) === "ac").slice(0, 4).map((x) => x.title).join(" / ") || "nada"));
+      if (!have.has("ac")) {
+        log("AllCalidad no coincidió con «" + title + "»; devolvió: " + (found.filter((x) => x.ref.slice(0, 2) === "ac").slice(0, 4).map((x) => x.title).join(" / ") || "nada"));
+        try {
+          const alt = await withTimeout(acLookup(title, kind), 7000);
+          if (alt) { have.add("ac"); refs.push(alt.ref); log("AllCalidad: encontrada con la búsqueda alterna (" + alt.title + ")"); }
+          else log("AllCalidad: tampoco apareció en la búsqueda alterna");
+        } catch (e) { log("AllCalidad: búsqueda alterna falló " + String((e && e.message) || e).slice(0, 40)); }
+      }
     }
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
   refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
@@ -1656,7 +1687,8 @@ export async function resolve(ref) {
   const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
   if (usable.length) cands = usable;
-  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
+  // Los servidores de AllCalidad se prueban primero; después van los demás (idioma y luego servidor).
+  cands.sort((a, b) => ((b.first ? 1 : 0) - (a.first ? 1 : 0)) || (((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url))));
   log("resolve: " + cands.length + " servidores de " + refs.length + " fuentes");
 
   // 2) enlaces directos del mejor idioma, sin esperar
