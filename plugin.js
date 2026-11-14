@@ -45,10 +45,16 @@ function stripTags(s) {
   return decodeEntities(String(s || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
 }
 
+
 function attr(tag, name) {
   const a = new RegExp(name + "=([\"'])([^\"']*)\\1", "i").exec(tag);
   return a ? a[2] : "";
 }
+
+// ---- Episodios --------------------------------------------------------------------------------
+
+// ---- DoramasYT: episodios y reproducción ------------------------------------------------------
+
 
 function hostOf(u) {
   const m = /^https?:\/\/([^\/?#]+)/i.exec(String(u || ""));
@@ -217,8 +223,8 @@ function diag(html, depth, found) {
 }
 
 // Lee la página de un reproductor y busca el video; si no está, sigue los reproductores que esa
-// página abre (hasta 2 niveles).
-const innerHosts = new Map();
+// página abre (hasta 2 niveles), porque el de TuDorama suele ser solo una envoltura.
+const innerHosts = new Map(); // envoltura -> a qué reproductores apunta
 
 // ok.ru guarda el video en un bloque de datos de su página ("hlsManifestUrl" o la lista de calidades).
 function okruMedia(html) {
@@ -245,6 +251,8 @@ async function embedFromHtml(embedUrl, depth, referer) {
   let u = deepMedia(html);
   if (!u && /(^|\.)ok\.ru$/i.test(hostOf(embedUrl))) { u = okruMedia(html); if (u) log("ok.ru: video encontrado"); }
   if (d === 0) innerHosts.set(embedUrl, embedLinks(html, embedUrl).map(hostOf));
+  // Una página diminuta, sin video ni enlaces, suele ser una pantalla de comprobación del servidor:
+  // con la cookie que acaba de dejar, el segundo intento trae la página real. Un solo reintento.
   if (!u && d >= 1 && html.length < 3000 && !/byse/i.test(hostOf(embedUrl)) && !embedLinks(html, embedUrl).length) {
     log("embed[" + d + "] página diminuta (" + html.length + " bytes): reintento");
     if (typeof kino.sleep === "function") await kino.sleep(900);
@@ -283,6 +291,20 @@ async function captureEmbed(embedUrl, ms) {
   return out;
 }
 
+// Devuelve el primer resultado que llegue (no el último): { v, i } o null si ninguno entrega nada.
+function firstSuccess(tasks) {
+  return new Promise((resolveAll) => {
+    let pending = tasks.length;
+    if (!pending) { resolveAll(null); return; }
+    tasks.forEach((t, i) => {
+      Promise.resolve(t).then((v) => { if (v) resolveAll({ v, i }); }, () => {}).then(() => {
+        pending--;
+        if (pending === 0) resolveAll(null);
+      });
+    });
+  });
+}
+
 // ---- Lectura de los sitios ----------------------------------------------------------------------
 
 async function getText(url, headers) {
@@ -316,24 +338,11 @@ async function getJson(url, referer) {
 const enc = encodeURIComponent;
 const dec = (s) => { try { return decodeURIComponent(s); } catch (e) { return String(s || ""); } };
 
-// Achica imágenes pesadas de TMDB para que las carátulas descarguen rápido.
-function shrinkImage(u, size) {
-  if (!u) return undefined;
-  let s = String(u).trim();
-  if (s.charAt(0) === "/") return "https://image.tmdb.org/t/p/" + (size || "w342") + s;
-  if (!/^https?:\/\//i.test(s)) return undefined;
-  if (/^https?:\/\/image\.tmdb\.org\/t\/p\//i.test(s)) {
-    s = s.replace(/\/t\/p\/(?:original|w1280|w780|w500|w342)\//i, "/t/p/" + (size || "w342") + "/");
-  }
-  return s;
-}
-
 function tmdbPoster(p) {
-  return shrinkImage(p, "w342");
-}
-
-function epPoster(p) {
-  return shrinkImage(p, "w300");
+  if (!p) return undefined;
+  p = String(p);
+  if (p.charAt(0) === "/") return "https://image.tmdb.org/t/p/w342" + p;
+  return /^https?:\/\//i.test(p) ? p : undefined;
 }
 
 function mkItem(src, kind, key, title, poster, year) {
@@ -390,7 +399,7 @@ async function pjEpisodes(kind, id, slug) {
       const eps = d.episodes || [];
       for (const e of eps) {
         const num = Number(e.episode) || out.length + 1;
-        out.push({ season: s, number: num, ref: "pj|e|" + enc(e.player_url || "") + "|" + enc(slug) + "|" + (kind === "a" ? "anime" : "serie") + "|" + id, title: stripTags(e.title) || tr("Episodio ", "Episode ") + num, poster: epPoster(e.still_path) });
+        out.push({ season: s, number: num, ref: "pj|e|" + enc(e.player_url || "") + "|" + enc(slug) + "|" + (kind === "a" ? "anime" : "serie") + "|" + id, title: stripTags(e.title) || tr("Episodio ", "Episode ") + num, poster: tmdbPoster(e.still_path) });
       }
       if (eps.length < 50) break;
     }
@@ -406,6 +415,7 @@ async function pjCandidates(spec) {
   let label = "PelisJuanita";
   if (p[0] === "e") player = dec(p[1]);
   else {
+    // película: pj|m|id|slug
     const slug = dec(p[2] || "");
     const det = await getJson(PJ_API + "/content/movie/" + enc(slug), PJ + "/");
     player = (det.item && det.item.player_url) || "";
@@ -461,7 +471,7 @@ async function hsEpisodes(id, slug) {
       const eid = e._id || e.id;
       if (!eid) continue;
       const num = Number(e.episode_number) || out.length + 1;
-      out.push({ season: Number(s), number: num, ref: "hs|e|" + eid, title: stripTags(e.title) || tr("Episodio ", "Episode ") + num, poster: epPoster(e.still_path) });
+      out.push({ season: Number(s), number: num, ref: "hs|e|" + eid, title: stripTags(e.title) || tr("Episodio ", "Episode ") + num, poster: tmdbPoster(e.still_path) });
     }
   };
   await Promise.allSettled(seasons.slice(0, 8).map(one));
@@ -553,7 +563,7 @@ async function fcEpisodes(path) {
       }
       const link = (e.link || []).find((x) => x.rel === "alternate");
       if (!season || !ep || !link) continue;
-      out.push({ season: Number(season), number: Number(ep), ref: "fc|e|" + enc(link.href.slice(FC.length)), title: stripTags((e.title && e.title.$t) || "") || tr("Episodio ", "Episode ") + ep, poster: epPoster(fcAttr(body, "data-backdrop")) });
+      out.push({ season: Number(season), number: Number(ep), ref: "fc|e|" + enc(link.href.slice(FC.length)), title: stripTags((e.title && e.title.$t) || "") || tr("Episodio ", "Episode ") + ep, poster: fcAttr(body, "data-backdrop") || undefined });
     }
     start += entries.length;
     if (entries.length < 150) break;
@@ -688,6 +698,7 @@ function nxItem(src, o, kind) {
   if (!slug) return null;
   const segs = String(slug).replace(/^\/+|\/+$/g, "").split("/");
   const last = segs[segs.length - 1];
+  // Poseidon usa la ruta completa (movies/<id>/<nombre> -> /pelicula/<id>/<nombre>); Cuevana solo el nombre.
   const rest = src === "po" ? (/^(movies|series|peliculas)$/i.test(segs[0]) ? segs.slice(1) : segs).join("/") : last;
   const t = (o.titles && (o.titles.name || o.titles.original)) || o.title || o.name || humanSlug(last);
   const img = o.images || {};
@@ -746,7 +757,7 @@ async function nxEpisodes(src, path) {
       const en = Number(e.number || e.episode);
       if (!en) continue;
       const ep = src === "po" ? path + "/temporada/" + sn + "/episodio/" + en : "/episodio/" + slug + "-temporada-" + sn + "-episodio-" + en;
-      out.push({ season: sn, number: en, ref: src + "|e|" + enc(ep), title: stripTags(e.title || e.name) || tr("Episodio ", "Episode ") + en, poster: epPoster(e.image || e.still_path) });
+      out.push({ season: sn, number: en, ref: src + "|e|" + enc(ep), title: stripTags(e.title || e.name) || tr("Episodio ", "Episode ") + en, poster: tmdbPoster(e.image || e.still_path) });
     }
   }
   log(cfg.name + " episodios: " + out.length + (pp ? "" : " (sin datos)"));
@@ -1175,6 +1186,8 @@ async function phCandidates(path) {
 }
 
 // ---- Filas nuevas del inicio: Estrenos y Mejor valoradas ----
+// Se arman con lo que ya trae el listado de PelisJuanita y HackStore (año y puntuación); no usan datos nuevos del sitio.
+// Cada "página" junta 3 páginas del listado reciente para tener de dónde elegir.
 const CHUNK = 3;
 const listCache = new Map();
 function cachedListing(url) {
@@ -1207,6 +1220,7 @@ async function pjChunk(kind, n) {
   return { raw, hasNext };
 }
 
+// Estrenos: los del año actual; si son pocos, también los del año anterior.
 function onlyNew(items) {
   const y = new Date().getFullYear();
   const a = items.filter((x) => x.year >= y);
@@ -1228,6 +1242,7 @@ async function hsNewPage(kind, n) {
   return { items: onlyNew(items), hasNext };
 }
 
+// Mejor valoradas: de lo que trae cada tanda, las de mayor puntuación primero.
 async function pjRatedPage(kind, n) {
   const c = await pjChunk(kind, n);
   const score = (o) => Number(o && (o.rating_avg || o.vote_average)) || 0;
@@ -1252,7 +1267,7 @@ const SECTIONS = {
 const SRC_PRIO = { pj: 0, hs: 1, po: 2, cu: 3, tp: 4, cc: 5, fc: 6, pp: 7, sf: 8, ph: 9, sm: 10, pf: 11, lc: 12, st: 13 };
 
 function normTitle(t) {
-  return String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
+  return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
 }
 
 // Une el mismo título de fuentes distintas en una sola tarjeta (ref "mx|a||b||c").
@@ -1271,7 +1286,7 @@ function mergeDupes(items) {
     if (!prev.poster && it.poster) prev.poster = it.poster;
     if (!prev.year && it.year) prev.year = it.year;
   }
-  // Cada tarjeta recuerda su título para buscar respaldo solo si hace falta.
+  // Cada tarjeta recuerda su título: al abrir un capítulo se buscan las demás fuentes por ese título.
   for (const it of out) {
     const refs = it.ref.startsWith("mx|") ? it.ref.slice(3).split("||") : [it.ref];
     it.ref = "mx|" + refs.join("||") + "||tt:" + enc(it.title) + ":" + (it.kind === "movie" ? "m" : "s");
@@ -1291,6 +1306,7 @@ async function sectionPage(sec, n) {
     else log("sección " + sec + " p" + n + ": falló la fuente " + i + " " + String((r.reason && r.reason.message) || r.reason).slice(0, 60));
   });
   if (!ok) throw (res[0].reason || kino.error("unavailable", "ninguna fuente respondió"));
+  // Se intercalan para que se vean las novedades de todas las fuentes.
   const mixed = [];
   const max = Math.max(...lists.map((l) => l.length), 0);
   for (let i = 0; i < max; i++) for (const l of lists) if (l[i]) mixed.push(l[i]);
@@ -1362,19 +1378,11 @@ export async function categories() {
   });
 }
 
-// Todas las búsquedas a la vez (filtradas por tipo si se indica "m" o "s").
+// Todas las búsquedas a la vez (sin unir): se usa en el buscador y para encontrar el mismo título en otras fuentes.
 const deadUntil = {};
-const MOVIE_ONLY_SRC = new Set(["cc", "ph", "pp"]);
-const SERIES_ONLY_SRC = new Set(["sm", "sf", "lc", "st"]);
-
-async function searchAll(qa, ms, kind) {
+async function searchAll(qa, ms) {
   const jobs = [["pj", pjSearch], ["hs", hsSearch], ["po", (q) => nxSearch("po", q)], ["cu", (q) => nxSearch("cu", q)], ["cc", ccSearch], ["sm", smSearch], ["sf", sfSearch], ["ph", phSearch], ["lc", lcSearch], ["st", stSearch], ["pp", ppSearch]]
-    .filter(([n]) => {
-      if (deadUntil[n] > Date.now()) return false;
-      if (kind === "m" && SERIES_ONLY_SRC.has(n)) return false;
-      if (kind === "s" && MOVIE_ONLY_SRC.has(n)) return false;
-      return true;
-    });
+    .filter(([n]) => !(deadUntil[n] > Date.now()));
   const res = await Promise.allSettled(jobs.map(([, f]) => withTimeout(f(qa), Math.min(ms || 9000, 7000))));
   const all = [];
   res.forEach((r, i) => {
@@ -1422,166 +1430,73 @@ async function episodesOne(raw) {
   throw kino.error("not_found", "referencia desconocida");
 }
 
-function parseRefParts(raw) {
+// Separa las fuentes del título y, si hace falta, busca el mismo título en las fuentes que aún no están.
+async function expandRefs(raw) {
   const parts = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter(Boolean);
   const refs = parts.filter((x) => x.indexOf("tt:") !== 0);
-  const ttRaw = parts.find((x) => x.indexOf("tt:") === 0) || "";
-  let tt = null;
-  if (ttRaw) {
-    const tp = ttRaw.split(":");
-    tt = {
-      raw: ttRaw,
-      title: dec(tp[1] || ""),
-      kind: tp[2] === "m" ? "m" : "s",
-      season: tp[3] ? Number(tp[3]) : 0,
-      number: tp[4] ? Number(tp[4]) : 0,
-    };
-  }
-  return { refs, tt };
-}
-
-// Espera a que terminen todas o corta rápido en cuanto ya tengamos episodios (y carátulas).
-async function collectFast(tasks, gracePosterMs, graceAnyMs) {
-  const results = new Array(tasks.length);
-  let done = 0;
-  let firstPosterAt = 0;
-  let firstAnyAt = 0;
-  const wrapped = tasks.map((p, i) => Promise.resolve(p).then(
-    (v) => {
-      results[i] = { status: "fulfilled", value: v };
-      done++;
-      if (v && Array.isArray(v.episodes) && v.episodes.length) {
-        if (!firstAnyAt) firstAnyAt = Date.now();
-        if (!firstPosterAt && v.episodes.some((e) => e && e.poster)) firstPosterAt = Date.now();
-      }
-    },
-    (reason) => {
-      results[i] = { status: "rejected", reason };
-      done++;
-    }
-  ));
-  if (typeof kino.sleep !== "function") {
-    await Promise.all(wrapped);
-    return results;
-  }
-  const start = Date.now();
-  while (done < tasks.length) {
-    const now = Date.now();
-    if (now - start >= 11000) break;
-    if (firstPosterAt && now - firstPosterAt >= gracePosterMs) break;
-    if (firstAnyAt && now - firstAnyAt >= graceAnyMs) break;
-    await kino.sleep(100);
-  }
-  return results;
-}
-
-const epCache = new Map();
-
-async function loadEpisodes(raw) {
-  const { refs, tt } = parseRefParts(raw);
-  if (!refs.length) throw kino.error("not_found", "referencia desconocida");
-  const kind = tt ? tt.kind : (refs[0].split("|")[1] === "m" ? "m" : "s");
-
-  // Película: responde al instante sin esperar búsquedas en otros sitios; si hace falta, resolve() buscará luego.
-  if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
-    const movieRef = (refs.length > 1 || tt ? "mx|" : "") + refs.join("||") + (tt ? "||" + tt.raw : "");
-    return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: movieRef, title: tr("Película", "Movie") }] };
-  }
-
-  let useRefs = refs.slice(0, 6);
-  let res = await collectFast(useRefs.map((r) => withTimeout(episodesOne(r), 9000)), 1200, 2500);
-
-  const pickBest = (list) => {
-    let best = null;
-    let bestI = -1;
-    list.forEach((r, i) => {
-      if (!r || r.status !== "fulfilled" || !r.value || !r.value.episodes.length) return;
-      const count = r.value.episodes.length;
-      const hasPoster = r.value.episodes.some((e) => !!e.poster);
-      if (
-        !best ||
-        count > best.episodes.length ||
-        (count === best.episodes.length && hasPoster && !best.episodes.some((e) => !!e.poster))
-      ) {
-        best = r.value;
-        bestI = i;
-      }
-    });
-    return { best, bestI };
-  };
-
-  let { best, bestI } = pickBest(res);
-
-  // Solo si ninguna fuente conocida respondió, busca la serie en los demás sitios.
-  if (!best && tt && tt.title) {
-    try {
-      const qa = tt.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
-      const want = normTitle(tt.title);
-      if (qa && want) {
-        const have = new Set(useRefs.map((r) => r.slice(0, 2)));
-        const found = await searchAll(qa, 5500, "s");
-        const extra = [];
-        for (const it of found) {
-          const src = it.ref.slice(0, 2);
-          if (have.has(src) || it.kind === "movie" || normTitle(it.title) !== want) continue;
-          have.add(src);
-          extra.push(it.ref);
-        }
-        if (extra.length) {
-          extra.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
-          useRefs = extra.slice(0, 5);
-          res = await collectFast(useRefs.map((r) => withTimeout(episodesOne(r), 8000)), 1200, 2500);
-          ({ best, bestI } = pickBest(res));
-        }
-      }
-    } catch (e) { log("respaldo episodios falló: " + String((e && e.message) || e).slice(0, 60)); }
-  }
-
-  if (!best) throw kino.error("not_found", "sin capítulos", { userMessage: tr("No se encontró la lista de capítulos de este título.", "No episode list found for this title.") });
-
-  const posterByKey = new Map();
-  const byKey = res.map((r) => {
-    const m = new Map();
-    if (r && r.status === "fulfilled" && r.value) {
-      for (const e of r.value.episodes) {
-        const k = e.season + "x" + e.number;
-        m.set(k, e.ref);
-        if (e.poster && !posterByKey.has(k)) posterByKey.set(k, e.poster);
+  const tt = parts.find((x) => x.indexOf("tt:") === 0);
+  if (!tt) return { refs, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
+  const tp = tt.split(":");
+  const title = dec(tp[1] || "");
+  const kind = tp[2] === "m" ? "m" : "s";
+  const have = new Set(refs.map((r) => r.slice(0, 2)));
+  try {
+    const qa = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
+    const want = normTitle(title);
+    if (qa && want) {
+      const found = await searchAll(qa, 7000);
+      for (const it of found) {
+        const src = it.ref.slice(0, 2);
+        if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
+        have.add(src);
+        refs.push(it.ref);
       }
     }
-    return m;
-  });
-
-  const eps = best.episodes.map((e) => {
-    const k = e.season + "x" + e.number;
-    const alts = [e.ref];
-    byKey.forEach((m, i) => { if (i !== bestI) { const o = m.get(k); if (o && alts.indexOf(o) < 0) alts.push(o); } });
-    alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
-    const ttEp = tt && tt.title ? "||tt:" + enc(tt.title) + ":s:" + e.season + ":" + e.number : "";
-    const epRef = (alts.length > 1 || ttEp ? "mx|" : "") + alts.join("||") + ttEp;
-    return Object.assign({}, e, {
-      ref: epRef,
-      poster: e.poster || posterByKey.get(k) || undefined,
-    });
-  });
-
-  eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  const series = Object.assign({}, best.series, {
-    title: (best.series && best.series.title) || (tt && tt.title) || "",
-  });
-  return { series, episodes: eps };
+  } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
+  refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
+  log("fuentes para este título: " + refs.map((r) => r.slice(0, 2)).join(","));
+  return { refs: refs.slice(0, 8), kind };
 }
 
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
-  const hit = epCache.get(raw);
-  if (hit && Date.now() - hit.t < 5 * 60 * 1000) return hit.p;
-  if (epCache.size > 30) epCache.clear();
-  const p = loadEpisodes(raw);
-  epCache.set(raw, { t: Date.now(), p });
-  p.catch(() => epCache.delete(raw));
-  return p;
+  const tAll = Date.now();
+  const { refs, kind } = await expandRefs(raw);
+  log("tiempo: buscar otras fuentes " + (Date.now() - tAll) + "ms");
+  if (!refs.length) throw kino.error("not_found", "referencia desconocida");
+  // Película: un solo capítulo que recuerda todas las fuentes.
+  if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
+    return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
+  }
+  const res = await Promise.allSettled(refs.map((r) => {
+    const t1 = Date.now();
+    const p = withTimeout(episodesOne(r), 14000);
+    p.then(() => log("tiempo: capítulos " + r.slice(0, 2) + " " + (Date.now() - t1) + "ms"), () => log("tiempo: capítulos " + r.slice(0, 2) + " falló a los " + (Date.now() - t1) + "ms"));
+    return p;
+  }));
+  log("tiempo: total capítulos " + (Date.now() - tAll) + "ms");
+  let best = null;
+  let bestI = -1;
+  res.forEach((r, i) => {
+    if (r.status !== "fulfilled" || !r.value || !r.value.episodes.length) { log("episodios: falló " + refs[i].slice(0, 2)); return; }
+    log("episodios: " + refs[i].slice(0, 2) + "=" + r.value.episodes.length);
+    if (!best || r.value.episodes.length > best.episodes.length) { best = r.value; bestI = i; }
+  });
+  if (!best) throw kino.error("not_found", "sin capítulos", { userMessage: tr("No se encontró la lista de capítulos de este título.", "No episode list found for this title.") });
+  const byKey = res.map((r) => {
+    const m = new Map();
+    if (r.status === "fulfilled" && r.value) for (const e of r.value.episodes) m.set(e.season + "x" + e.number, e.ref);
+    return m;
+  });
+  const eps = best.episodes.map((e) => {
+    const alts = [e.ref];
+    byKey.forEach((m, i) => { if (i !== bestI) { const o = m.get(e.season + "x" + e.number); if (o && alts.indexOf(o) < 0) alts.push(o); } });
+    alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
+    return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.join("||") }) : e;
+  });
+  eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
+  return Object.assign({}, best, { episodes: eps });
 }
 
 // ---- Reproducción -------------------------------------------------------------------------------
@@ -1628,151 +1543,99 @@ async function verifyMedia(m) {
   } catch (e) { return false; }
 }
 
-// Busca el título en otros sitios solo cuando hace falta al darle Play.
-async function expandFromTt(tt, haveRefs, ms) {
-  if (!tt || !tt.title) return [];
-  const qa = tt.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
-  const want = normTitle(tt.title);
-  if (!qa || !want) return [];
-  const have = new Set(haveRefs.map((r) => r.slice(0, 2)));
-  const found = await searchAll(qa, ms, tt.kind);
-  const matched = [];
-  for (const it of found) {
-    const src = it.ref.slice(0, 2);
-    if (have.has(src) || (it.kind === "movie") !== (tt.kind === "m") || normTitle(it.title) !== want) continue;
-    have.add(src);
-    matched.push(it.ref);
-  }
-  matched.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
-  if (tt.kind === "m" || !tt.season || !tt.number) return matched.slice(0, 5);
-  const epRes = await Promise.allSettled(matched.slice(0, 4).map((r) => withTimeout(episodesOne(r), Math.min(ms, 4500))));
-  const epRefs = [];
-  for (const r of epRes) {
-    if (r.status !== "fulfilled" || !r.value) continue;
-    const hit = r.value.episodes.find((e) => e.season === tt.season && e.number === tt.number);
-    if (hit && hit.ref) epRefs.push(hit.ref);
-  }
-  return epRefs;
-}
-
-const USELESS_HOST = /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i;
-
-function buildCands(got) {
-  let cands = [];
-  let lastErr = null;
-  got.forEach((g) => {
-    if (g.status === "fulfilled") cands = cands.concat(g.value);
-    else lastErr = g.reason;
-  });
-  cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
-  const usable = cands.filter((c) => !USELESS_HOST.test(hostOf(c.url)));
-  if (usable.length) cands = usable;
-  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
-  return { cands, lastErr };
-}
-
 // Junta los servidores de TODAS las fuentes y prueba en orden (Latino primero, luego Castellano y Subtitulado)
 // hasta que uno entregue el video.
 export async function resolve(ref) {
   await null;
   const t0 = Date.now();
   const raw = String(ref || "");
-  const { refs: rawRefs, tt } = parseRefParts(raw);
-  const refs = rawRefs.slice(0, 8);
+  const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida");
   const total = 17000;
   const left = () => total - (Date.now() - t0);
 
-  let expanded = false;
-  let allRefs = refs.slice();
+  // 1) servidores de todas las fuentes, a la vez
+  const got = await Promise.allSettled(refs.map((r) => withTimeout(candidatesOf(r.slice(0, 2), r.slice(3)), 7000)));
+  let cands = [];
+  let lastErr = null;
+  got.forEach((g, i) => {
+    if (g.status === "fulfilled") cands = cands.concat(g.value);
+    else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
+  });
+  cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
+  // Servidores que piden verificación humana o que nunca entregaron video: solo si no hay otros.
+  const useless = (c) => /dood|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
+  const usable = cands.filter((c) => !useless(c));
+  if (usable.length) cands = usable;
+  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
+  log("resolve: " + cands.length + " servidores de " + refs.length + " fuentes");
 
-  const tryBatch = async (batchRefs) => {
-    const got = await Promise.allSettled(batchRefs.map((r) => withTimeout(candidatesOf(r.slice(0, 2), r.slice(3)), Math.min(6000, Math.max(2500, left() - 2000)))));
-    const { cands, lastErr } = buildCands(got);
-    log("resolve: " + cands.length + " servidores de " + batchRefs.length + " fuentes");
-    if (!cands.length) return { winner: null, fallback: null, lastErr };
+  // 2) enlaces directos del mejor idioma, sin esperar
+  const minLang = cands.length ? Math.min(...cands.map((c) => c.lang || 0)) : 0;
+  const bd = cands.find((c) => isDirect(c) && (c.lang || 0) === minLang);
+  if (bd) return asDirect(bd);
 
-    const minLang = Math.min(...cands.map((c) => c.lang || 0));
-    const bd = cands.find((c) => isDirect(c) && (c.lang || 0) === minLang);
-    if (bd) return { winner: asDirect(bd), fallback: null, lastErr };
-
-    const embeds = cands.filter((c) => !isDirect(c));
-    const browserOk = typeof kino.browser === "object" && kino.browser && typeof kino.browser.capture === "function";
-    let winner = null;
-    let fallback = null;
-    let pending = 0;
-    let captureStarted = false;
-    const pendLang = new Map();
-
-    const accept = async (v, c) => {
-      v.label = c.label;
-      const l = c.lang || 0;
-      if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l }; }
-      else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !USELESS_HOST.test(hostOf(c.url))) fallback = v; }
-    };
-    const start = (c) => {
-      pending++;
-      pendLang.set(c, c.lang || 0);
-      embedFromHtml(c.url, 0, c.referer || REF).then((v) => (v ? accept(v, c) : null))
-        .catch((e) => log("resolve: " + hostOf(c.url) + " falló " + String((e && e.message) || e).slice(0, 40)))
-        .then(() => { pending--; pendLang.delete(c); });
-    };
-    const startCapture = () => {
-      if (captureStarted || !browserOk || winner) return;
-      const fe = embeds.find((c) => !USELESS_HOST.test(hostOf(c.url))) || embeds[0];
-      if (!fe || left() < 4500) return;
-      captureStarted = true;
-      pending++;
-      log("resolve: sin video aún, el navegador oculto arranca en paralelo");
-      captureEmbed(fe.url, Math.min(10000, left() - 1500))
-        .then((s) => (s ? accept(s, fe) : log("resolve: el navegador no vio video")))
-        .catch((e) => log("resolve: captura falló " + String((e && e.message) || e).slice(0, 60)))
-        .then(() => { pending--; });
-    };
-    const waitFor = async (ms) => {
-      const end = Date.now() + ms;
-      while (Date.now() < end && pending > 0) {
-        if (winner && !Array.from(pendLang.values()).some((l) => l < winner.l)) return;
-        await kino.sleep(200);
-      }
-    };
-
-    for (let i = 0; i < embeds.length && left() > 4000 && !winner; i += 4) {
-      embeds.slice(i, i + 4).forEach(start);
-      await waitFor(Math.min(3000, left() - 3000));
-      if (!winner) startCapture();
-    }
-    if (!winner) startCapture();
-    if (!winner && pending > 0 && left() > 1500) await waitFor(Math.max(1500, left() - 2000));
-    if (winner) {
-      if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1200);
-      return { winner: winner.v, fallback, lastErr };
-    }
-    const ld = cands.find(isDirect);
-    if (ld) return { winner: asDirect(ld), fallback, lastErr };
-    return { winner: null, fallback, lastErr };
+  // 3) reproductores: se van abriendo de 4 en 4 sin soltar los anteriores; gana el primero que entregue un video
+  //    que de verdad abra. Si a los 4,5 s nadie ha entregado nada, el navegador oculto arranca en paralelo.
+  const embeds = cands.filter((c) => !isDirect(c));
+  const BAD = /dood|mixdrop|susanexpect|waaw|hqq|netu|nupload/i;
+  const browserOk = typeof kino.browser === "object" && kino.browser && typeof kino.browser.capture === "function";
+  let winner = null;
+  let fallback = null;
+  let pending = 0;
+  let captureStarted = false;
+  const pendLang = new Map();
+  const accept = async (v, c) => {
+    v.label = c.label;
+    const l = c.lang || 0;
+    if (await verifyMedia(v)) { if (!winner || l < winner.l) winner = { v, l }; }
+    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url))) fallback = v; }
   };
-
-  let res = await tryBatch(refs);
-  if (res.winner) return res.winner;
-
-  // Si las fuentes iniciales fallaron y aún queda tiempo, busca en los demás sitios por título.
-  if (!expanded && tt && tt.title && left() > 5500) {
-    expanded = true;
-    try {
-      const extraRefs = await expandFromTt(tt, allRefs, Math.min(4500, left() - 3500));
-      if (extraRefs.length) {
-        log("resolve: buscando respaldo en " + extraRefs.map((r) => r.slice(0, 2)).join(","));
-        const res2 = await tryBatch(extraRefs);
-        if (res2.winner) return res2.winner;
-        if (!res.fallback && res2.fallback) res.fallback = res2.fallback;
-        if (!res.lastErr && res2.lastErr) res.lastErr = res2.lastErr;
-      }
-    } catch (e) { log("resolve respaldo falló: " + String((e && e.message) || e).slice(0, 60)); }
+  const start = (c) => {
+    pending++;
+    pendLang.set(c, c.lang || 0);
+    embedFromHtml(c.url, 0, c.referer || REF).then((v) => (v ? accept(v, c) : null))
+      .catch((e) => log("resolve: " + hostOf(c.url) + " falló " + String((e && e.message) || e).slice(0, 40)))
+      .then(() => { pending--; pendLang.delete(c); });
+  };
+  const startCapture = () => {
+    if (captureStarted || !browserOk || winner) return;
+    const fe = embeds.find((c) => !BAD.test(hostOf(c.url))) || embeds[0];
+    if (!fe || left() < 5000) return;
+    captureStarted = true;
+    pending++;
+    log("resolve: sin video aún, el navegador oculto arranca en paralelo");
+    captureEmbed(fe.url, Math.min(12000, left() - 1500))
+      .then((s) => (s ? accept(s, fe) : log("resolve: el navegador no vio video")))
+      .catch((e) => log("resolve: captura falló " + String((e && e.message) || e).slice(0, 60)))
+      .then(() => { pending--; });
+  };
+  const waitFor = async (ms) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && pending > 0) {
+      if (winner && !Array.from(pendLang.values()).some((l) => l < winner.l)) return;
+      await kino.sleep(200);
+    }
+  };
+  for (let i = 0; i < embeds.length && left() > 4500 && !winner; i += 4) {
+    embeds.slice(i, i + 4).forEach(start);
+    await waitFor(Math.min(3000, left() - 3500));
+    if (!winner) startCapture();
+  }
+  if (!winner) startCapture();
+  if (!winner && pending > 0 && left() > 1500) await waitFor(Math.max(1500, left() - 2500));
+  if (winner) {
+    if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1500);
+    return winner.v;
   }
 
-  if (res.fallback) return res.fallback;
-  throw res.lastErr && res.lastErr.code ? res.lastErr : kino.error("unavailable", "ningún servidor entregó el video", {
+  // 4) enlaces directos de otros idiomas
+  const ld = cands.find(isDirect);
+  if (ld) return asDirect(ld);
+
+  // 5) si ninguno confirmó, se entrega el dudoso (más vale intentar que fallar)
+  if (fallback) return fallback;
+  throw lastErr && lastErr.code ? lastErr : kino.error("unavailable", "ningún servidor entregó el video", {
     userMessage: tr("Ningún servidor de este título se pudo abrir desde aquí. Prueba otro título.", "No server for this title could be opened from here. Try another title."),
   });
 }
