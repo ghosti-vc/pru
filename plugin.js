@@ -1327,7 +1327,7 @@ const SECTIONS = {
 };
 
 // Fuentes que la persona deja activadas en los ajustes (todas activadas por defecto).
-function srcOn(id) { try { return String(kino.config.get("src_" + id) || "on") !== "off"; } catch (e) { return true; } }
+function srcOn(id) { return true; } // todas las fuentes siempre activas (sin interruptores)
 // Quita las referencias de fuentes desactivadas; si no quedara ninguna, se dejan todas (mejor eso que un error).
 function onlyOn(refs) { const on = refs.filter((r) => srcOn(r.slice(0, 2))); return on.length ? on : refs; }
 
@@ -1504,7 +1504,7 @@ export async function search(query) {
   await null;
   const q = stripTags(query && query.q).slice(0, 100);
   if (!q) return [];
-  if (cfg("searchsrc") === "tmdb") {
+  if (typeof kino.tmdb === "function") { // siempre TMDB; si falla o no hay, se busca en las fuentes
     try {
       const r = await withTimeout(tmdbSearch(q), 7000);
       if (r.length) { log("búsqueda TMDB: " + r.length + " resultados"); return r; }
