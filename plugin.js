@@ -1526,6 +1526,11 @@ async function tmdbSearch(q) {
       genres: [movie ? "peliculas" : "series"],
       poster: tmdbPoster(r.poster_path),
       year: ym ? Number(ym[1]) : undefined,
+      ids: { tmdb: r.id },
+      originalTitle: orig || undefined,
+      overview: r.overview ? String(r.overview).slice(0, 1800) : undefined,
+      backdrop: r.backdrop_path ? "https://image.tmdb.org/t/p/w780" + r.backdrop_path : undefined,
+      rating: typeof r.vote_average === "number" && r.vote_average > 0 && r.vote_average <= 10 ? Math.round(r.vote_average * 10) / 10 : undefined,
     });
   }
   return out.slice(0, MAX_RESULTS);
@@ -1614,24 +1619,24 @@ async function tmdbEpisodes(raw) {
   const rawSafe = enc(raw);
   if (tp[2] === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "tm|" + enc(title) + "|0|1|1|" + rawSafe, title: tr("Película", "Movie") }] };
   const t0 = Date.now();
-  const det = await withTimeout(kino.tmdb("/tv/" + id, { language: "es-MX" }), 7000);
-  const seasons = ((det && det.seasons) || []).filter((x) => x.season_number > 0).slice(0, 20);
-  const got = await Promise.allSettled(seasons.map((x) => withTimeout(kino.tmdb("/tv/" + id + "/season/" + x.season_number, { language: "es-MX" }), 8000)));
+  const det0 = await withTimeout(kino.tmdb("/tv/" + id, { language: "es-MX" }), 7000);
+  const nums = ((det0 && det0.seasons) || []).map((x) => x.season_number).filter((n) => n > 0).slice(0, 20);
+  const det = nums.length ? await withTimeout(kino.tmdb("/tv/" + id, { language: "es-MX", append_to_response: nums.map((n) => "season/" + n).join(",") }), 9000) : det0;
   const out = [];
   let abs = 0;
-  got.forEach((g, i) => {
-    if (g.status !== "fulfilled") { log("TMDB: falló la temporada " + seasons[i].season_number); return; }
-    for (const e of (g.value && g.value.episodes) || []) {
+  for (const sn of nums) {
+    for (const e of (det && det["season/" + sn] && det["season/" + sn].episodes) || []) {
       abs++;
       const n = Number(e.episode_number) || 0;
       if (!n) continue;
-      out.push({ season: seasons[i].season_number, number: n, ref: "tm|" + enc(title) + "|" + seasons[i].season_number + "|" + n + "|" + abs + "|" + rawSafe, title: e.name || (tr("Episodio ", "Episode ") + n), poster: tmdbPoster(e.still_path) });
+      const still = e.still_path ? "https://image.tmdb.org/t/p/w300" + e.still_path : undefined;
+      out.push({ season: sn, number: n, ref: "tm|" + enc(title) + "|" + sn + "|" + n + "|" + abs + "|" + rawSafe, title: e.name || (tr("Episodio ", "Episode ") + n), still, poster: still, overview: e.overview ? String(e.overview).slice(0, 1500) : undefined, airDate: e.air_date || undefined });
     }
-  });
+  }
   if (!out.length) { log("TMDB: sin capítulos, se usa la lista de las fuentes"); return null; }
   log("TMDB: " + out.length + " capítulos en " + (Date.now() - t0) + "ms");
   out.sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  return { series: { title: stripTags(det.name) || title }, episodes: out };
+  return { series: { title: stripTags(det.name) || title, ids: { tmdb: id } }, episodes: out };
 }
 
 const epMemo = new Map();
