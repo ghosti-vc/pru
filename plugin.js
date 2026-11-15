@@ -162,9 +162,22 @@ export async function resolve(ref) {
       const r2 = await kino.fetch(next, { headers: Object.assign({}, H, { Referer: o.url }), redirect: "manual" });
       const t2 = String(await r2.text());
       log("dbg r2 status=" + r2.status + " url=" + String(r2.url || "").slice(0, 120) + " loc=" + hdr(r2, "location").slice(0, 160) + " largo=" + t2.length);
-      const c = t2.replace(/\s+/g, " ");
-      for (let i = 0; i < c.length && i < 1800; i += 600) log("dbg r2parte" + (i / 600 + 1) + ": " + c.slice(i, i + 600));
-      const media = findMedia(t2);
+      const loc = hdr(r2, "location");
+      let t3 = "";
+      if (loc) {
+        const H3 = Object.assign({}, H, { Referer: "https://mp4.nu/" });
+        const r3 = await kino.fetch(loc, { headers: H3 });
+        t3 = String(await r3.text());
+        log("dbg r3 status=" + r3.status + " largo=" + t3.length + " eval=" + /eval\(function\(p,a,c,k,e/.test(t3));
+        const c = t3.replace(/\s+/g, " ");
+        const st = Math.max(0, c.indexOf("<body"));
+        for (let i = 0; i < 2400 && st + i < c.length; i += 600) log("dbg r3parte" + (i / 600 + 1) + ": " + c.slice(st + i, st + i + 600));
+        const m3 = /(?:file|src|source|sources)["']?\s*[:=]\s*["']([^"']+)["']/i.exec(c);
+        log("dbg r3file=" + (m3 ? m3[1].slice(0, 200) : "-"));
+        const mm = c.match(/https?:\/\/[^"'\s<>\\]+/g) || [];
+        log("dbg r3urls=" + mm.filter((u) => !/google|yandex|cloudflare|jquery|jsdelivr/.test(u)).slice(0, 8).join(" "));
+      }
+      const media = findMedia(t3) || findMedia(t2);
       log("dbg media=" + (media || "-"));
       if (media) return { url: media, mime: /\.m3u8/i.test(media) ? "application/x-mpegurl" : "video/mp4", headers: { Referer: next } };
     } catch (e) {
