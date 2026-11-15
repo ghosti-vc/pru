@@ -148,24 +148,27 @@ export async function resolve(ref) {
   log("opciones: " + opts.length + " -> " + opts.map((o) => o.label).join(" | "));
   if (!opts.length) throw kino.error("not_found", "sin opciones", { userMessage: tr("Esta película aún no tiene video.", "This movie has no video yet.") });
 
-  // Diagnóstico: cómo responde cada intermediario con la página de PelisForte como origen.
+  // Diagnóstico: mp4.nu -> r.php?h=... -> servidor real
+  const hdr = (r, k) => { try { return (r.headers && (r.headers.get ? r.headers.get(k) : r.headers[k])) || ""; } catch (e) { return ""; } };
   for (const o of opts.slice(0, 3)) {
     try {
-      const r = await kino.fetch(o.url, { headers: { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" } });
+      const H = { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" };
+      const r = await kino.fetch(o.url, { headers: H });
       const t = String(await r.text());
-      log("dbg " + o.label + " status=" + r.status + " largo=" + t.length + " url=" + o.url.slice(0, 40));
-      if (o === opts[0]) {
-        const c = t.replace(/\s+/g, " ");
-        const k = c.indexOf("<script");
-        const body = c.slice(Math.max(0, c.indexOf("</style>")));
-        for (let i = 0; i < body.length && i < 3600; i += 600) log("dbg parte" + (i / 600 + 1) + ": " + body.slice(i, i + 600));
-      }
-      const iframe = (/<iframe[^>]*src=["']([^"']+)["']/i.exec(t) || [])[1];
-      const media = findMedia(t);
-      log("dbg iframe=" + (iframe || "-") + " media=" + (media || "-"));
-      if (media) return { url: media, mime: /\.m3u8/i.test(media) ? "application/x-mpegurl" : "video/mp4", headers: { Referer: o.url } };
+      const rp = /location\.replace\("([^"]+)"/.exec(t);
+      if (!rp) { log("dbg " + o.label + " sin r.php"); continue; }
+      const next = new URL(rp[1], o.url).href;
+      log("dbg " + o.label + " next=" + next.slice(0, 60));
+      const r2 = await kino.fetch(next, { headers: Object.assign({}, H, { Referer: o.url }), redirect: "manual" });
+      const t2 = String(await r2.text());
+      log("dbg r2 status=" + r2.status + " url=" + String(r2.url || "").slice(0, 120) + " loc=" + hdr(r2, "location").slice(0, 160) + " largo=" + t2.length);
+      const c = t2.replace(/\s+/g, " ");
+      for (let i = 0; i < c.length && i < 1800; i += 600) log("dbg r2parte" + (i / 600 + 1) + ": " + c.slice(i, i + 600));
+      const media = findMedia(t2);
+      log("dbg media=" + (media || "-"));
+      if (media) return { url: media, mime: /\.m3u8/i.test(media) ? "application/x-mpegurl" : "video/mp4", headers: { Referer: next } };
     } catch (e) {
-      log("dbg " + o.label + " falló " + String((e && e.message) || e).slice(0, 80));
+      log("dbg " + o.label + " falló " + String((e && e.message) || e).slice(0, 120));
     }
   }
   throw kino.error("not_found", "sin video directo", { userMessage: tr("Aún no se puede reproducir este título.", "This title cannot be played yet.") });
