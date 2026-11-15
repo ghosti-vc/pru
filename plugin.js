@@ -141,7 +141,7 @@ function findMedia(t) {
 export async function resolve(ref) {
   await null;
   const p = String(ref || "").split("|");
-  if (p[0] !== "p" || !p[1]) throw kino.error("not_found", "referencia desconocida");
+  if ((p[0] !== "p" && p[0] !== "m") || !p[1]) throw kino.error("not_found", "referencia desconocida");
   const pageUrl = SITE + dec(p[1]);
   const html = await getText(pageUrl);
   const opts = pageOptions(html);
