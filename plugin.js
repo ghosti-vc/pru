@@ -138,6 +138,47 @@ function findMedia(t) {
   return m ? m[0] : null;
 }
 
+const hdr = (r, k) => { try { return (r.headers && (r.headers.get ? r.headers.get(k) : r.headers[k])) || ""; } catch (e) { return ""; } };
+const BAD_MEDIA = /(?:\.jpe?g|\.png|\.gif|\.webp|\.vtt|\.srt|\/thumbnail|googima|doubleclick|yandex)/i;
+
+// mp4.nu/?h=... -> r.php?h=... -> 302 al servidor real (Byse / Vidara / Okhd)
+async function realEmbed(o, pageUrl) {
+  const H = { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" };
+  const r = await kino.fetch(o.url, { headers: H });
+  const t = String(await r.text());
+  const rp = /location\.replace\("([^"]+)"/.exec(t);
+  if (!rp) return null;
+  const next = new URL(rp[1], o.url).href;
+  const r2 = await kino.fetch(next, { headers: Object.assign({}, H, { Referer: o.url }), redirect: "manual" });
+  const loc = hdr(r2, "location");
+  return loc ? new URL(loc, next).href : null;
+}
+
+async function captureOne(o, pageUrl) {
+  const embed = await realEmbed(o, pageUrl);
+  if (!embed) throw new Error("sin redirección");
+  log("embed " + o.label + " -> " + embed.slice(0, 60));
+  if (!kino.browser || typeof kino.browser.capture !== "function") throw new Error("sin navegador");
+  const page = await kino.browser.capture(embed, { timeoutMs: 15000, headers: { Referer: "https://mp4.nu/" } });
+  const media = page && Array.isArray(page.media) ? page.media : [];
+  log("captura " + o.label + ": " + media.length + " medios " + media.slice(0, 3).map((x) => String((x && x.url) || "").slice(0, 70)).join(" ; "));
+  const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !BAD_MEDIA.test(x.url));
+  if (!first) throw new Error("sin medios");
+  const out = { url: first.url, mime: first.mime || first.mimeType || (/\.m3u8(\?|$)/i.test(first.url) ? "application/x-mpegurl" : "video/mp4") };
+  out.headers = first.headers && typeof first.headers === "object" ? first.headers : { Referer: embed };
+  return out;
+}
+
+function firstSuccess(tasks) {
+  return new Promise((done) => {
+    let pending = tasks.length;
+    if (!pending) { done(null); return; }
+    tasks.forEach((t) => {
+      Promise.resolve(t).then((v) => { if (v) done(v); }, (e) => log("falló: " + String((e && e.message) || e).slice(0, 80))).then(() => { if (--pending === 0) done(null); });
+    });
+  });
+}
+
 export async function resolve(ref) {
   await null;
   const p = String(ref || "").split("|");
@@ -147,42 +188,10 @@ export async function resolve(ref) {
   const opts = pageOptions(html);
   log("opciones: " + opts.length + " -> " + opts.map((o) => o.label).join(" | "));
   if (!opts.length) throw kino.error("not_found", "sin opciones", { userMessage: tr("Esta película aún no tiene video.", "This movie has no video yet.") });
-
-  // Diagnóstico: mp4.nu -> r.php?h=... -> servidor real
-  const hdr = (r, k) => { try { return (r.headers && (r.headers.get ? r.headers.get(k) : r.headers[k])) || ""; } catch (e) { return ""; } };
-  for (const o of opts.slice(0, 3)) {
-    try {
-      const H = { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" };
-      const r = await kino.fetch(o.url, { headers: H });
-      const t = String(await r.text());
-      const rp = /location\.replace\("([^"]+)"/.exec(t);
-      if (!rp) { log("dbg " + o.label + " sin r.php"); continue; }
-      const next = new URL(rp[1], o.url).href;
-      log("dbg " + o.label + " next=" + next.slice(0, 60));
-      const r2 = await kino.fetch(next, { headers: Object.assign({}, H, { Referer: o.url }), redirect: "manual" });
-      const t2 = String(await r2.text());
-      log("dbg r2 status=" + r2.status + " url=" + String(r2.url || "").slice(0, 120) + " loc=" + hdr(r2, "location").slice(0, 160) + " largo=" + t2.length);
-      const loc = hdr(r2, "location");
-      let t3 = "";
-      if (loc) {
-        const H3 = Object.assign({}, H, { Referer: "https://mp4.nu/" });
-        const r3 = await kino.fetch(loc, { headers: H3 });
-        t3 = String(await r3.text());
-        log("dbg r3 status=" + r3.status + " largo=" + t3.length + " eval=" + /eval\(function\(p,a,c,k,e/.test(t3));
-        const c = t3.replace(/\s+/g, " ");
-        const st = Math.max(0, c.indexOf("<body"));
-        for (let i = 0; i < 2400 && st + i < c.length; i += 600) log("dbg r3parte" + (i / 600 + 1) + ": " + c.slice(st + i, st + i + 600));
-        const m3 = /(?:file|src|source|sources)["']?\s*[:=]\s*["']([^"']+)["']/i.exec(c);
-        log("dbg r3file=" + (m3 ? m3[1].slice(0, 200) : "-"));
-        const mm = c.match(/https?:\/\/[^"'\s<>\\]+/g) || [];
-        log("dbg r3urls=" + mm.filter((u) => !/google|yandex|cloudflare|jquery|jsdelivr/.test(u)).slice(0, 8).join(" "));
-      }
-      const media = findMedia(t3) || findMedia(t2);
-      log("dbg media=" + (media || "-"));
-      if (media) return { url: media, mime: /\.m3u8/i.test(media) ? "application/x-mpegurl" : "video/mp4", headers: { Referer: next } };
-    } catch (e) {
-      log("dbg " + o.label + " falló " + String((e && e.message) || e).slice(0, 120));
-    }
-  }
-  throw kino.error("not_found", "sin video directo", { userMessage: tr("Aún no se puede reproducir este título.", "This title cannot be played yet.") });
+  // Primero latino; si no hay, lo que haya.
+  const lat = opts.filter((o) => /latino/i.test(o.label));
+  const pick = (lat.length ? lat : opts).slice(0, 3);
+  const got = await firstSuccess(pick.map((o) => captureOne(o, pageUrl)));
+  if (got) return got;
+  throw kino.error("not_found", "sin video directo", { userMessage: tr("No se pudo obtener el video. Prueba de nuevo.", "Could not get the video. Try again.") });
 }
