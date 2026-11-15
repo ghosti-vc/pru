@@ -154,7 +154,12 @@ export async function resolve(ref) {
       const r = await kino.fetch(o.url, { headers: { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" } });
       const t = String(await r.text());
       log("dbg " + o.label + " status=" + r.status + " largo=" + t.length + " url=" + o.url.slice(0, 40));
-      log("dbg cuerpo: " + t.slice(0, 700).replace(/\s+/g, " "));
+      if (o === opts[0]) {
+        const c = t.replace(/\s+/g, " ");
+        const k = c.indexOf("<script");
+        const body = c.slice(Math.max(0, c.indexOf("</style>")));
+        for (let i = 0; i < body.length && i < 3600; i += 600) log("dbg parte" + (i / 600 + 1) + ": " + body.slice(i, i + 600));
+      }
       const iframe = (/<iframe[^>]*src=["']([^"']+)["']/i.exec(t) || [])[1];
       const media = findMedia(t);
       log("dbg iframe=" + (iframe || "-") + " media=" + (media || "-"));
