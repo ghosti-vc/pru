@@ -1533,13 +1533,14 @@ async function tmdbSearch(q) {
 
 export async function search(query) {
   await null;
+  const tIn = Date.now(); log("► buscar: entra la llamada"); const tDone = (x) => { log("◄ buscar: lista en " + (Date.now() - tIn) + " ms"); return x; };
   const q = stripTags(query && query.q).slice(0, 100);
   if (!q) return [];
   if (typeof kino.tmdb === "function") { // siempre TMDB; si falla o no hay, se busca en las fuentes
     try {
       const r = await withTimeout(tmdbSearch(q), 7000);
       log("búsqueda TMDB: " + r.length + " resultados");
-      return r; // solo resultados de TMDB (aunque no haya ninguno)
+      return tDone(r); // solo resultados de TMDB (aunque no haya ninguno)
     } catch (e) { log("TMDB: falló (" + String((e && e.message) || e).slice(0, 50) + "), se busca en las fuentes"); }
   }
   const qa = q.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim() || q;
@@ -1673,10 +1674,11 @@ async function tmdbToMx(ref) {
 
 export async function episodes(ref) {
   await null;
+  const tIn = Date.now(); log("► capítulos: entra la llamada"); const tDone = (x) => { log("◄ capítulos: lista en " + (Date.now() - tIn) + " ms"); return x; };
   const raw = String(ref || "");
   try {
     const viaTmdb = await tmdbEpisodes(raw);
-    if (viaTmdb) return viaTmdb;
+    if (viaTmdb) return tDone(viaTmdb);
   } catch (e) { log("TMDB: falló (" + String((e && e.message) || e).slice(0, 50) + "), se usa la lista de las fuentes"); }
   const { refs, kind } = await expandRefs(raw);
   if (!refs.length) throw kino.error("not_found", "referencia desconocida", { userMessage: tr("Este título no se encontró en las fuentes activas.", "This title was not found in the active sources.") });
@@ -1784,6 +1786,7 @@ async function verifyMedia(m) {
 // demás) y gana el primer video que de verdad abra. Latino primero: si el ganador no es Latino, se esperan 1,5 s por uno mejor.
 export async function resolve(ref) {
   await null;
+  const tIn = Date.now(); log("► reproducir: entra la llamada"); const tDone = (x) => { log("◄ reproducir: lista en " + (Date.now() - tIn) + " ms"); return x; };
   const t0 = Date.now();
   if (String(ref || "").indexOf("tm|") === 0) ref = await tmdbToMx(ref);
   const raw = String(ref || "");
