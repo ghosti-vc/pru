@@ -3,7 +3,7 @@
   "name": "PelisForte",
   "description": "Películas en español latino, castellano y subtituladas desde PelisForte.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": ["home", "browse", "search", "episodes", "resolve"],
