@@ -4,8 +4,6 @@
 globalThis.__kinoDropPendingFetches = true; // al terminar una llamada, Kino no espera lo que haya quedado pendiente
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
 const SITES = [
-  ["pp", "PelisPlusHD", "https://www.pelisplushd.la"],
-  ["fl", "FlixLatam", "https://flixlatam.com"],
   ["ch", "Cinehax", "https://cinehax.com"],
 ];
 
@@ -91,8 +89,13 @@ async function homeOf(site) {
 
 export async function home() {
   await null;
+  const f = rHome("f").catch(() => []);
+  const a = rHome("a").catch(() => []);
   const res = await Promise.allSettled(SITES.map((s) => homeOf(s)));
   const rows = [];
+  const fi = await f, ai = await a;
+  if (fi.length) rows.push({ id: "row-f", title: "FanPelis", genre: "peliculas", ref: "f", items: fi.slice(0, 20) });
+  if (ai.length) rows.push({ id: "row-a", title: "AllCalidad", genre: "peliculas", ref: "a", items: ai.slice(0, 20) });
   res.forEach((r, i) => {
     if (r.status === "fulfilled" && r.value.length) rows.push({ id: "row-" + SITES[i][0], title: SITES[i][1], genre: "series", ref: SITES[i][0], items: r.value.slice(0, 20) });
     else log("inicio: falló " + SITES[i][1]);
@@ -103,6 +106,7 @@ export async function home() {
 
 export async function browse(ref) {
   await null;
+  if (String(ref) === "f" || String(ref) === "a") return { items: await rHome(String(ref)) };
   const site = SITES.find((s) => s[0] === String(ref));
   if (!site) throw fail("not_found", "sitio desconocido", "Ese catálogo no existe.", "That catalog does not exist.");
   return { items: await homeOf(site) };
@@ -112,6 +116,7 @@ export async function search(query) {
   await null;
   const q = String((query && query.q) || "").trim().slice(0, 80);
   if (!q) return [];
+  const rp = ["f", "a"].map((k) => cached("rq:" + k + ":" + q.toLowerCase(), 120000, () => rSearch(k, q)).catch((e) => { log("buscar " + REST[k][0] + " falló"); return []; }));
   const res = await Promise.allSettled(SITES.map(async ([id, name, base]) => {
     const s = await cached("q:" + id + ":" + q.toLowerCase(), 120000, () => get(base + "/?s=" + encodeURIComponent(q)));
     const cards = parseCards(base, s.text);
@@ -120,12 +125,15 @@ export async function search(query) {
   }));
   const out = [];
   res.forEach((r) => { if (r.status === "fulfilled") out.push.apply(out, r.value); });
+  const rr = await Promise.all(rp);
+  rr.forEach((arr, i) => { log("buscar " + REST[["f", "a"][i]][0] + " resultados=" + arr.length); out.push.apply(out, arr.slice(0, 15)); });
   return out;
 }
 
 // ---- Capítulos ------------------------------------------------------------------------------------
 export async function episodes(ref) {
   await null;
+  if (isRest(ref)) return rEpisodes(ref);
   const url = decodeURIComponent(String(ref || "").slice(2));
   if (!/^https:\/\//i.test(url)) throw fail("not_found", "referencia desconocida", "No se encontró este título.", "Title not found.");
   const site = siteOf(url);
@@ -149,12 +157,39 @@ export async function episodes(ref) {
     if (slug && href.indexOf(slug) < 0) continue;
     seen.add(href);
     const label = dec(m[2].replace(/<[^>]*>/g, " "));
-    eps.push({ season: Number(sm[1]), number: Number(sm[2]), ref: "p|" + encodeURIComponent(href), title: label && label.length < 80 ? label : tr("Episodio ", "Episode ") + sm[2] });
+    eps.push({ season: Number(sm[1]), number: Number(sm[2]), ref: "p|" + encodeURIComponent(href), title: label && label.length > 3 && label.length < 80 && !/^T\d+$/i.test(label) ? label : tr("Episodio ", "Episode ") + sm[2] });
+  }
+  // Las temporadas que no traen enlaces se arman con el JSON de la página (cantidad de capítulos).
+  const lm = /"containsSeason":(\[[\s\S]*?\])\s*,\s*"(?:creator|genre|actor)"/.exec(t);
+  if (lm) {
+    let seasons = [];
+    try { seasons = JSON.parse(lm[1]); } catch (e) { seasons = []; }
+    const seUrl = url.replace(/\/(?:temporada|season)-\d+.*$/, "").replace(/\/$/, "");
+    for (const ss of seasons) {
+      const sn = Number(ss && ss.seasonNumber);
+      const cnt = Number(ss && ss.numberOfEpisodes) || 0;
+      if (!sn || !cnt) continue;
+      for (let n = 1; n <= cnt && n <= 200; n++) {
+        const href = seUrl + "/temporada-" + sn + "/episodio-" + n + "/";
+        if (seen.has(href)) continue;
+        seen.add(href);
+        eps.push({ season: sn, number: n, ref: "p|" + encodeURIComponent(href), title: tr("Episodio ", "Episode ") + n });
+      }
+    }
   }
   log("capítulos " + url.slice(0, 70) + ": " + eps.length);
   if (!eps.length) {
     // Aún no se conoce la forma de esta página: se anotan pistas para la siguiente versión.
     (t.match(/href="[^"]*(?:episodio|capitulo|temporada|season|episode)[^"]*"/gi) || []).slice(0, 8).forEach((x, i) => log("pista cap" + i + " " + x.slice(0, 140)));
+    const paths = {};
+    const hre = /href="(?:https?:\/\/[^\/"]+)?(\/[^"#?]{3,90})"/gi;
+    let hm;
+    while ((hm = hre.exec(t))) { const k = hm[1].replace(/\d+/g, "#"); paths[k] = (paths[k] || 0) + 1; }
+    log("pista rutas: " + Object.keys(paths).sort((x, y) => paths[y] - paths[x]).slice(0, 14).join(" , "));
+    const dts = (t.match(/data-(?:season|episode|temporada|capitulo|num|id|post|serie)[^>]{0,60}/gi) || []).slice(0, 6);
+    log("pista datos: " + dts.join(" ; "));
+    const ajx = (t.match(/(?:admin-ajax|wp-json|\/api\/)[^"'\s)]{0,80}/gi) || []).slice(0, 5);
+    log("pista api: " + ajx.join(" ; "));
     throw fail("not_found", "sin capítulos", "No se encontró la lista de capítulos de este título.", "No episode list found for this title.");
   }
   eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
@@ -341,37 +376,139 @@ function firstSuccess(tasks) {
   });
 }
 
+// Prueba los servidores que ofrece una página: el primero que entregue video gana.
+async function playEmbeds(embeds, pageUrl) {
+  log("servidores: " + embeds.map((e) => hostOf(e.url) + (e.name ? "(" + e.name + ")" : "")).join(", "));
+  if (!embeds.length) throw fail("unavailable", "sin servidores", "No se encontraron servidores de video en esta página.", "No video servers found on this page.");
+  // Los servidores que casi siempre entregan video arrancan primero; los demás esperan un poco. Así, si uno gana pronto,
+  // no quedan peticiones lentas pendientes (Kino no da por lista la llamada hasta que terminan).
+  const hostDelay = (h) => (/videoapi|vimeos|goodstream|lamovie/i.test(h) ? 0 : /moviemaster/i.test(h) ? 1000 : /tukiplay|unlimplay/i.test(h) ? 2500 : 1200);
+  const tasks = embeds.map((e) => (async () => {
+    const wait = Math.max(e.rank > 0 ? Math.min(2500, 1000 * e.rank) : 0, hostDelay(hostOf(e.url)));
+    if (wait) await sleepUpTo(wait);
+    const got = await fromEmbed(e.url, 0, pageUrl);
+    return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
+  })());
+  // Respaldo: reproductores que se arman con JavaScript (streamwish, vidhide...) se abren en el navegador oculto.
+  const JSHOST = /wish|vidhide|filelions|dhcplay|hgcloud|dintezuvio|minochinos|callistanise|vibuxer|hglink|flixlatam/i;
+  const cands = embeds.filter((e) => JSHOST.test(hostOf(e.url))).slice(0, 2);
+  // Solo una página oculta a la vez (si no, Kino responde "busy"): se prueban en fila.
+  const capTasks = cands.length ? [(async () => {
+    await sleepUpTo(700);
+    for (const e of cands) {
+      log("navegador oculto: " + hostOf(e.url));
+      try {
+        const got = await captureEmbed(e.url, pageUrl, 11000);
+        if (got) { log("navegador oculto: video en " + hostOf(e.url)); return Object.assign(got, { label: e.name || hostOf(e.url) }); }
+      } catch (er) { log("navegador oculto falló: " + String((er && er.message) || er).slice(0, 60)); }
+    }
+    return null;
+  })()] : [];
+  const st = { done: false };
+  const win = await Promise.race([firstSuccess(tasks.concat(capTasks)), sleepUpTo(15000, st).then(() => null)]);
+  st.done = true;
+  if (win) return win;
+  throw fail("unavailable", "sin video", "No se pudo abrir el video de este título. Prueba otro.", "Could not open this title's video. Try another.");
+}
+
+// ---- Sitios con API rest (FanPelis y AllCalidad usan el mismo motor) ---------------------------------------
+const REST = { f: ["FanPelis", "https://fanpelis.to"], a: ["AllCalidad", "https://allcalidad.re"] };
+
+async function rJson(k, path) {
+  const [name, base] = REST[k];
+  const r = await kino.fetch(base + "/api/rest" + path, { headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", Referer: base + "/" } });
+  const t = await r.text();
+  if (!r.ok) { log(name + " " + path.slice(0, 40) + " status=" + r.status); throw fail("unavailable", "status " + r.status, name + " respondió con el error " + r.status + ".", name + " answered with error " + r.status + "."); }
+  try { return JSON.parse(t); } catch (e) { log(name + " json inválido " + path.slice(0, 40) + " inicio=" + t.slice(0, 100)); throw fail("unavailable", "respuesta no válida", name + " respondió algo inesperado.", name + " answered something unexpected."); }
+}
+
+function rImg(k, o) {
+  const base = REST[k][1];
+  const im = (o && o.images) || {};
+  let p = String(im.poster || im.backdrop || o.poster || o.still_path || "");
+  if (!p) return undefined;
+  if (/^https?:\/\//i.test(p)) return p;
+  if (p.charAt(0) !== "/") p = "/" + p;
+  return p.indexOf("/wp-content/") === 0 ? base + p : base + "/wp-content/uploads" + p;
+}
+
+function rItem(k, o) {
+  if (!o) return null;
+  const id = String(o._id || o.id || "");
+  if (!id) return null;
+  const type = String(o.type || o.post_type || "movies");
+  const m = type === "movies" ? "m" : "s";
+  const title = String(o.title || o.name || "").replace(/\s*\(\d{4}\)\s*$/, "").trim();
+  if (!title) return null;
+  const kind = m === "m" ? "movie" : "series";
+  return { id: k + "-" + id, ref: k + "|" + m + "|" + id, title: title.slice(0, 200), kind, genres: [m === "m" ? "peliculas" : "series"], poster: rImg(k, o) };
+}
+
+async function rSearch(k, q) {
+  const d = await rJson(k, "/search?query=" + encodeURIComponent(q) + "&post_type=movies,tvshows,animes");
+  return (((d && d.data && d.data.posts) || []).map((o) => rItem(k, o))).filter(Boolean);
+}
+
+// Catálogo del inicio: se prueban rutas conocidas de este motor y se anota cuál responde.
+async function rHome(k) {
+  const tries = ["/listing/movies?page=1&postsPerPage=20&orderBy=latest&order=desc", "/posts?post_type=movies&page=1&per_page=20", "/latest?post_type=movies&page=1"];
+  for (const p of tries) {
+    try {
+      const d = await rJson(k, p);
+      const posts = (d && d.data && (d.data.posts || d.data)) || [];
+      const items = (Array.isArray(posts) ? posts : []).map((o) => rItem(k, o)).filter(Boolean);
+      log(REST[k][0] + " inicio " + p.slice(0, 30) + " -> " + items.length);
+      if (items.length) return items;
+    } catch (e) { /* ya anotado */ }
+  }
+  return [];
+}
+
+async function rEpisodes(ref) {
+  const p = String(ref).split("|");
+  const k = p[0];
+  const id = p[2];
+  if (p[1] === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: k + "|m|" + id, title: tr("Película", "Movie") }] };
+  const d = await rJson(k, "/episodes?post_id=" + encodeURIComponent(id));
+  const out = [];
+  for (const e of Array.isArray(d && d.data) ? d.data : []) {
+    const eid = e && (e._id || e.id);
+    if (!eid) continue;
+    const season = parseInt(e.season_number, 10) || 1;
+    const num = parseInt(e.episode_number, 10) || out.length + 1;
+    out.push({ season, number: num, ref: k + "|e|" + eid, title: dec(String(e.title || "").replace(/<[^>]*>/g, " ")) || tr("Episodio ", "Episode ") + num, poster: rImg(k, e) });
+  }
+  log(REST[k][0] + " episodios: " + out.length);
+  if (!out.length) throw fail("not_found", "sin capítulos", "No se encontró la lista de capítulos de este título.", "No episode list found for this title.");
+  out.sort((x, y) => (x.season - y.season) || (x.number - y.number));
+  return { series: { title: "" }, episodes: out };
+}
+
+async function rResolve(ref) {
+  const p = String(ref).split("|");
+  const k = p[0];
+  const d = await rJson(k, "/player?post_id=" + encodeURIComponent(p[2]) + "&_any=1");
+  const embeds = [];
+  for (const e of (d && d.data && d.data.embeds) || []) {
+    const u = absUrl(e && e.url);
+    if (!u || SKIP_HOST.test(hostOf(u)) || USELESS.test(hostOf(u))) continue;
+    const l = String(e.lang || "");
+    embeds.push({ url: u, name: l, rank: langRank(l) });
+  }
+  embeds.sort((x, y) => x.rank - y.rank);
+  return playEmbeds(embeds.slice(0, 10), REST[k][1] + "/");
+}
+
+const isRest = (ref) => /^[fa]\|/.test(String(ref || ""));
+
 export async function resolve(ref) {
   await null;
+  if (isRest(ref)) return rResolve(ref);
   const url = decodeURIComponent(String(ref || "").slice(2));
   if (!/^https:\/\//i.test(url)) throw fail("not_found", "referencia desconocida", "No se encontró este título.", "Title not found.");
   const site = siteOf(url);
   const base = site ? site[2] : "";
   const h = await cached("t:" + url, 300000, () => get(url));
   if (!h.ok) throw fail("unavailable", "status " + h.status, "El sitio respondió con el error " + h.status + ".", "The site answered with error " + h.status + ".");
-  const embeds = embedsOf(base, url, h.text);
-  log("servidores: " + embeds.map((e) => hostOf(e.url) + (e.name ? "(" + e.name + ")" : "")).join(", "));
-  if (!embeds.length) throw fail("unavailable", "sin servidores", "No se encontraron servidores de video en esta página.", "No video servers found on this page.");
-  // Latino primero; los otros idiomas esperan un poco por si Latino responde.
-  const tasks = embeds.map((e, i) => (async () => {
-    if (e.rank > 0) await sleepUpTo(Math.min(2500, 1000 * e.rank));
-    const got = await fromEmbed(e.url, 0, url);
-    return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
-  })());
-  // Respaldo: reproductores que se arman con JavaScript (streamwish, vidhide...) se abren en el navegador oculto
-  // si en unos segundos nadie entregó video.
-  const JSHOST = /wish|vidhide|filelions|dhcplay|hgcloud|vidara|dintezuvio|minochinos|callistanise|vibuxer|hglink/i;
-  const cands = embeds.filter((e) => JSHOST.test(hostOf(e.url))).slice(0, 2);
-  const capTasks = cands.map((e, i) => (async () => {
-    await sleepUpTo(2500 + i * 500);
-    log("navegador oculto: " + hostOf(e.url));
-    const got = await captureEmbed(e.url, url, 11000);
-    if (got) log("navegador oculto: video en " + hostOf(e.url));
-    return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
-  })());
-  const st = { done: false };
-  const win = await Promise.race([firstSuccess(tasks.concat(capTasks)), sleepUpTo(15000, st).then(() => null)]);
-  st.done = true;
-  if (win) return win;
-  throw fail("unavailable", "sin video", "No se pudo abrir el video de este título. Prueba otro.", "Could not open this title's video. Try another.");
+  return playEmbeds(embedsOf(base, url, h.text), url);
 }
