@@ -1,6 +1,7 @@
 // Sitios (prueba 0.2.0): PelisPlusHD, FlixLatam y Cinehax. Películas y series.
 // Solo lee páginas públicas. No resuelve verificaciones, captchas ni cuentas.
 
+globalThis.__kinoDropPendingFetches = true; // al terminar una llamada, Kino no espera lo que haya quedado pendiente
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
 const SITES = [
   ["pp", "PelisPlusHD", "https://www.pelisplushd.la"],
@@ -207,7 +208,7 @@ function base64Texts(html) {
   return out;
 }
 
-function findMedia(text, loose) {
+function findMedia(text, loose, origin) {
   const t = normText(text);
   const re = loose ? /((?:https?:)?\/\/[^\s"'`<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'`<>\\]*)?)/gi : new RegExp(MEDIA_RE.source, "gi");
   let m;
@@ -215,14 +216,19 @@ function findMedia(text, loose) {
     const u = absUrl(m[1]);
     if (u && !DEMO.test(u)) return u;
   }
+  // Rutas relativas ("/stream/abc/master.m3u8"), muy usadas por streamwish y similares.
+  if (origin) {
+    const rr = /["'`](\/(?!\/)[^"'`\s<>\\]+?\.(?:m3u8|mp4)(?:\?[^"'`\s<>\\]*)?)["'`]/gi;
+    while ((m = rr.exec(t))) { const u = origin + m[1]; if (!DEMO.test(u)) return u; }
+  }
   return "";
 }
 
-function deepMedia(html) {
-  let u = findMedia(html);
+function deepMedia(html, origin) {
+  let u = findMedia(html, false, origin);
   if (u) return u;
-  for (const t of unpackAll(html)) { u = findMedia(t); if (u) return u; }
-  for (const t of base64Texts(html)) { u = findMedia(t, true); if (u) return u; }
+  for (const t of unpackAll(html)) { u = findMedia(t, false, origin); if (u) return u; }
+  for (const t of base64Texts(html)) { u = findMedia(t, true, origin); if (u) return u; }
   return "";
 }
 
@@ -252,10 +258,15 @@ async function fromEmbed(url, depth, referer) {
   log("reproductor " + hostOf(url) + " status=" + r.status);
   if (!r.ok) return null;
   const html = await r.text();
-  const u = deepMedia(html);
+  const org = (/^(https?:\/\/[^\/?#]+)/i.exec(url) || [])[1] || "";
+  const u = deepMedia(html, org);
   if (u) {
     log("video encontrado en " + hostOf(url));
     return { url: u, mime: /\.m3u8/i.test(u) ? "application/x-mpegurl" : "video/mp4", headers: playHeaders(url) };
+  }
+  if (depth === 0 || depth >= 1) {
+    const inner0 = innerLinks(html, url);
+    log("sin video directo en " + hostOf(url) + " largo=" + html.length + " enlaces=" + inner0.map((x) => hostOf(x) + x.replace(/^https?:\/\/[^\/]+/, "").slice(0, 30)).join(",") + " muestra=" + html.replace(/\s+/g, " ").slice(0, 160));
   }
   if (depth >= 1) return null;
   for (const l of innerLinks(html, url)) {
@@ -291,9 +302,9 @@ function embedsOf(base, pageUrl, html) {
 }
 
 // kino.sleep solo acepta hasta 5 s: se espera en tandas.
-async function sleepUpTo(ms) {
+async function sleepUpTo(ms, stop) {
   let left = ms;
-  while (left > 0) { const c = Math.min(left, 4500); await kino.sleep(c); left -= c; }
+  while (left > 0 && !(stop && stop.done)) { const c = Math.min(left, stop ? 500 : 4500); await kino.sleep(c); left -= c; }
   return null;
 }
 
@@ -324,7 +335,9 @@ export async function resolve(ref) {
     const got = await fromEmbed(e.url, 0, url);
     return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
   })());
-  const win = await Promise.race([firstSuccess(tasks), sleepUpTo(16000).then(() => null)]);
+  const st = { done: false };
+  const win = await Promise.race([firstSuccess(tasks), sleepUpTo(15000, st).then(() => null)]);
+  st.done = true;
   if (win) return win;
   throw fail("unavailable", "sin video", "No se pudo abrir el video de este título. Prueba otro.", "Could not open this title's video. Try another.");
 }
