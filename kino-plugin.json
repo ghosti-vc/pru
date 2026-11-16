@@ -1,9 +1,9 @@
 {
-  "id": "sitios-prueba",
-  "name": "Sitios (prueba)",
-  "description": "Prueba de sitios de películas y series: revisa cada uno y anota en el log lo que encuentra.",
+  "id": "movie",
+  "name": "Movie",
+  "description": "Películas y series desde FanPelis, Cinehax y AllCalidad.",
   "author": "Ghosti-vc",
-  "version": "0.4.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -14,12 +14,13 @@
     "resolve"
   ],
   "hosts": [
-    "pelisplushd.la",
-    "www.pelisplushd.la",
-    "flixlatam.com",
-    "www.flixlatam.com",
+    "fanpelis.to",
+    "www.fanpelis.to",
+    "allcalidad.re",
+    "www.allcalidad.re",
     "cinehax.com",
-    "www.cinehax.com"
+    "www.cinehax.com",
+    "image.tmdb.org"
   ],
   "fetchHosts": "any",
   "streamHosts": "any",
