@@ -3,11 +3,24 @@
   "name": "Sitios (prueba)",
   "description": "Prueba de sitios de películas y series: revisa cada uno y anota en el log lo que encuentra.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["sololatino.net", "www.sololatino.net", "fanpelis.to", "cine24h.online", "flixlatam.com", "www.flixlatam.com", "cinehax.com", "www.cinehax.com", "pelisplushd.la", "www.pelisplushd.la"],
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
+  ],
+  "hosts": [
+    "pelisplushd.la",
+    "www.pelisplushd.la",
+    "flixlatam.com",
+    "www.flixlatam.com",
+    "cinehax.com",
+    "www.cinehax.com"
+  ],
   "fetchHosts": "any",
   "streamHosts": "any"
 }
