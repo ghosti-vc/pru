@@ -1,197 +1,151 @@
-// PelisForte - películas (v0.1.0, con diagnóstico de reproducción).
-const SITE = "https://www2.pelisforte.se";
-const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
-const HOME_ROW = 20;
-const enc = encodeURIComponent;
+// Sitios (prueba 0.1.0): revisa varios sitios de películas y series y anota en el log cómo están hechos.
+// Solo lee páginas públicas. No resuelve verificaciones, captchas ni cuentas: si un sitio las pide, solo lo anota.
 
-function log(...a) { try { kino.log(...a); } catch { /* sin registro */ } }
+const UA = "Mozilla/5.0 (Linux; Android 13; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
+const SITES = [
+  ["sl", "SoloLatino", "https://sololatino.net"],
+  ["fp", "FanPelis", "https://fanpelis.to"],
+  ["c2", "Cine24h", "https://cine24h.online"],
+  ["fl", "FlixLatam", "https://flixlatam.com"],
+  ["ch", "Cinehax", "https://cinehax.com"],
+  ["pp", "PelisPlusHD", "https://www.pelisplushd.la"],
+];
+
+function log(...a) { try { kino.log(...a); } catch (e) { /* no romper */ } }
 function tr(es, en) { return kino.lang === "en-US" ? en : es; }
-function dec(s) { try { return decodeURIComponent(s); } catch { return String(s || ""); } }
-function decodeEntities(s) {
-  return String(s || "")
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+function fail(code, detail, es, en) { return kino.error(code, detail, { userMessage: tr(es, en) }); }
+function dec(s) {
+  return String(s || "").replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").trim();
+    .replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 }
-function stripTags(s) { return decodeEntities(String(s || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ")); }
-
-async function getText(url, headers) {
-  let r;
-  try {
-    r = await kino.fetch(url, { headers: Object.assign({ "User-Agent": UA, "Accept-Language": "es-MX,es;q=0.9", Referer: SITE + "/" }, headers || {}) });
-  } catch (e) {
-    log("fetch falló " + url.slice(0, 80) + " " + String((e && e.message) || e).slice(0, 60));
-    throw kino.error("unavailable", "fetch falló", { userMessage: tr("No se pudo abrir el sitio. Prueba de nuevo en un momento.", "Could not open the site. Try again in a moment.") });
-  }
-  if (!r.ok) {
-    log("fetch " + url.slice(0, 80) + " status=" + r.status);
-    const um = { userMessage: tr("El sitio respondió con el error " + r.status + ".", "The site answered with error " + r.status + ".") };
-    if (r.status === 404) throw kino.error("not_found", "404", um);
-    throw kino.error("unavailable", "status " + r.status, um);
-  }
-  return r.text();
+function abs(base, u) {
+  u = String(u || "").trim();
+  if (!u) return "";
+  if (u.startsWith("//")) return "https:" + u;
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.charAt(0) === "/") return base + u;
+  return "";
 }
 
-// ---- Tarjetas ------------------------------------------------------------------------------------
-function parseCards(html) {
+async function get(url) {
+  const r = await kino.fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "es", Accept: "text/html,application/json" } });
+  const t = await r.text();
+  return { status: r.status, ok: r.ok, text: t };
+}
+
+// Tarjetas genéricas: un enlace que contiene una imagen con título (alt) o un atributo title.
+function parseCards(base, html) {
   const out = [];
   const seen = new Set();
-  const re = /<li id="post-\d+"[^>]*>([\s\S]*?)<\/li>/gi;
+  const re = /<a\b[^>]*href="([^"#]+)"[^>]*>([\s\S]{0,900}?)<\/a>/gi;
   let m;
-  while ((m = re.exec(html))) {
-    const b = m[1];
-    const href = (/<a href="(https?:\/\/[^"]*\/pelicula\/[^"]+)"[^>]*class="lnk-blk"/i.exec(b) || /<a href="(https?:\/\/[^"]*\/pelicula\/[^"]+)"/i.exec(b) || [])[1];
-    if (!href) continue;
-    const title = stripTags((/<h2 class="entry-title">([\s\S]*?)<\/h2>/i.exec(b) || [])[1] || "");
-    const img = (/<img[^>]*\ssrc="([^"]+)"/i.exec(b) || [])[1] || "";
-    const year = Number((/<span class="year">(\d{4})</i.exec(b) || [])[1]) || undefined;
-    const path = href.replace(/^https?:\/\/[^/]+/, "");
-    if (!title || seen.has(path)) continue;
-    seen.add(path);
-    const num = (/-(\d+)$/.exec(path) || [])[1] || String(out.length);
-    out.push({
-      id: "pf-" + num,
-      ref: "m|" + enc(path) + "|" + enc(title.slice(0, 80)),
-      title: title.slice(0, 200),
-      kind: "movie",
-      genres: ["peliculas"],
-      year,
-      poster: /^https?:/.test(img) ? img.replace(/-\d+x\d+(\.\w+)$/, "$1") : undefined,
-    });
+  while ((m = re.exec(html)) && out.length < 60) {
+    const href = abs(base, m[1]);
+    if (!href || href.indexOf(base.replace(/^https?:\/\/(www\.)?/, "")) < 0 || seen.has(href)) continue;
+    const img = /<img\b[^>]*>/i.exec(m[2]);
+    if (!img) continue;
+    const alt = /\balt="([^"]{2,})"/i.exec(img[0]) || /\btitle="([^"]{2,})"/i.exec(m[0]);
+    const src = /\b(?:data-src|data-lazy-src|src)="([^"]+)"/i.exec(img[0]);
+    const title = dec(alt ? alt[1] : "").replace(/^(ver|póster|poster|imagen)\s+/i, "");
+    if (!title || title.length < 2) continue;
+    seen.add(href);
+    out.push({ href, title, poster: src ? abs(base, dec(src[1])) : "" });
   }
   return out;
 }
 
-async function listPage(path, n) {
-  const url = SITE + (n > 1 ? path.replace(/\/$/, "") + "/page/" + n : path);
-  const html = await getText(url);
-  const items = parseCards(html);
-  const hasNext = items.length >= 10 && /\/page\/\d+/.test(html);
-  return { items, hasNext };
+// Informe de un sitio (solo lectura): estado, tipo de protección, motor probable y rutas útiles.
+async function diag(site) {
+  const [id, name, base] = site;
+  const rep = [name];
+  try {
+    const h = await get(base + "/");
+    const t = h.text;
+    rep.push("status=" + h.status, "largo=" + t.length);
+    if (/just a moment|cf-chl|challenge-platform|captcha|verify you are human|turnstile/i.test(t)) rep.push("PIDE_VERIFICACION");
+    const gen = /<meta name="generator" content="([^"]+)"/i.exec(t);
+    if (gen) rep.push("generador=" + gen[1].slice(0, 30));
+    if (/wp-content|wp-json/i.test(t)) rep.push("wordpress");
+    if (/__NEXT_DATA__|_next\/static/i.test(t)) rep.push("nextjs");
+    if (/wp-api\/v1/i.test(t)) rep.push("wp-api/v1");
+    const cards = parseCards(base, t);
+    rep.push("tarjetas=" + cards.length);
+    const paths = {};
+    const hre = /href="(\/[a-z0-9_-]+)\//gi;
+    let hm;
+    while ((hm = hre.exec(t))) paths[hm[1]] = (paths[hm[1]] || 0) + 1;
+    rep.push("rutas=" + Object.keys(paths).sort((a, b) => paths[b] - paths[a]).slice(0, 8).join(","));
+    if (cards[0]) rep.push("ej=" + cards[0].href.replace(base, "").slice(0, 50));
+    log("DIAG " + rep.join(" | "));
+    // Prueba de búsqueda del sitio (para saber la forma de la dirección).
+    for (const p of ["/?s=amor", "/search?q=amor", "/buscar?q=amor"]) {
+      try {
+        const s = await get(base + p);
+        const n = parseCards(base, s.text).length;
+        log("DIAG " + name + " búsqueda " + p + " status=" + s.status + " tarjetas=" + n);
+        if (n) break;
+      } catch (e) { log("DIAG " + name + " búsqueda " + p + " falló"); }
+    }
+    return cards.map((c) => ({ id: id + "-" + c.href.replace(/[^a-z0-9]+/gi, "-").slice(-60), ref: "p|" + encodeURIComponent(c.href), title: c.title.slice(0, 200), kind: "series", genres: ["series"], poster: c.poster || undefined }));
+  } catch (e) {
+    log("DIAG " + name + " falló: " + String((e && e.message) || e).slice(0, 80));
+    return [];
+  }
 }
-
-const SECTIONS = {
-  nuevas: { path: "/todas-las-peliculas", title: ["Últimas películas", "Latest movies"] },
-  latino: { path: "/pelis/idiomas/espanol-latino", title: ["Español Latino", "Latin Spanish"] },
-  accion: { path: "/peliculas/accion-p01", title: ["Acción", "Action"] },
-  drama: { path: "/peliculas/drama", title: ["Drama", "Drama"] },
-};
 
 export async function home() {
   await null;
-  const ids = Object.keys(SECTIONS);
-  const res = await Promise.allSettled(ids.map((id) => listPage(SECTIONS[id].path, 1)));
+  const res = await Promise.allSettled(SITES.map((s) => diag(s)));
   const rows = [];
   res.forEach((r, i) => {
-    if (r.status !== "fulfilled") { log("home: falló " + ids[i] + " " + String((r.reason && r.reason.message) || r.reason).slice(0, 60)); return; }
-    const items = r.value.items.slice(0, HOME_ROW);
-    if (items.length) rows.push({ id: "row-" + ids[i], title: tr(SECTIONS[ids[i]].title[0], SECTIONS[ids[i]].title[1]), genre: "peliculas", ref: ids[i], items });
+    if (r.status === "fulfilled" && r.value.length) rows.push({ id: "row-" + SITES[i][0], title: SITES[i][1], genre: "series", ref: SITES[i][0], items: r.value.slice(0, 20) });
   });
-  log("home filas=" + rows.length);
-  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
+  if (!rows.length) throw fail("unavailable", "ningún sitio respondió", "Ningún sitio respondió. Mira el registro para ver el motivo.", "No site answered. Check the log for the reason.");
   return rows;
 }
 
-export async function browse(ref, cursor) {
+export async function browse(ref) {
   await null;
-  const sec = SECTIONS[String(ref || "")];
-  if (!sec) throw kino.error("not_found", "catálogo desconocido");
-  const n = Math.max(1, parseInt(cursor, 10) || 1);
-  const p = await listPage(sec.path, n);
-  const out = { items: p.items };
-  if (p.hasNext) out.next = String(n + 1);
-  return out;
+  const site = SITES.find((s) => s[0] === String(ref));
+  if (!site) throw fail("not_found", "sitio desconocido", "Ese catálogo no existe.", "That catalog does not exist.");
+  return { items: await diag(site) };
 }
 
 export async function search(query) {
   await null;
-  const q = stripTags(query && query.q).slice(0, 100);
+  const q = String((query && query.q) || "").trim().slice(0, 80);
   if (!q) return [];
-  const html = await getText(SITE + "/?s=" + enc(q));
-  const items = parseCards(html);
-  log("búsqueda: " + items.length + " películas");
-  return items;
+  const res = await Promise.allSettled(SITES.map(async ([id, name, base]) => {
+    const s = await get(base + "/?s=" + encodeURIComponent(q));
+    const cards = parseCards(base, s.text);
+    log("BUSCAR " + name + " status=" + s.status + " tarjetas=" + cards.length);
+    return cards.slice(0, 12).map((c) => ({ id: id + "-" + c.href.replace(/[^a-z0-9]+/gi, "-").slice(-60), ref: "p|" + encodeURIComponent(c.href), title: c.title.slice(0, 200), kind: "series", genres: ["series"], poster: c.poster || undefined }));
+  }));
+  const out = [];
+  res.forEach((r) => { if (r.status === "fulfilled") out.push.apply(out, r.value); });
+  return out;
 }
 
+// Al abrir un título: se anota cómo está hecha su página (capítulos, reproductores) para la siguiente versión.
 export async function episodes(ref) {
   await null;
-  const p = String(ref || "").split("|");
-  if (p[0] !== "m" || !p[1]) throw kino.error("not_found", "referencia desconocida");
-  return { series: { title: dec(p[2] || "") }, episodes: [{ season: 1, number: 1, ref: "p|" + p[1], title: tr("Película", "Movie") }] };
-}
-
-// ---- Reproducción (diagnóstico) -----------------------------------------------------------------
-function pageOptions(html) {
-  const labels = [];
-  const lre = /<a class="btn[^"]*" href="#options-(\d+)">[\s\S]*?<span class="server">([\s\S]*?)<\/span>/gi;
-  let m;
-  while ((m = lre.exec(html))) labels[Number(m[1])] = stripTags(m[2]);
-  const out = [];
-  const re = /<div id="options-(\d+)"[^>]*>[\s\S]*?<iframe[^>]*data-src="([^"]+)"/gi;
-  while ((m = re.exec(html))) out.push({ n: Number(m[1]), url: decodeEntities(m[2]), label: labels[Number(m[1])] || "Opción " + (Number(m[1]) + 1) });
-  return out;
-}
-
-function findMedia(t) {
-  const s = String(t || "").replace(/\\\//g, "/");
-  const m = /https?:\/\/[^"'\s<>\\]+\.(?:m3u8|mp4)[^"'\s<>\\]*/i.exec(s);
-  return m ? m[0] : null;
-}
-
-const hdr = (r, k) => { try { return (r.headers && (r.headers.get ? r.headers.get(k) : r.headers[k])) || ""; } catch (e) { return ""; } };
-const BAD_MEDIA = /(?:\.jpe?g|\.png|\.gif|\.webp|\.vtt|\.srt|\/thumbnail|googima|doubleclick|yandex)/i;
-
-// mp4.nu/?h=... -> r.php?h=... -> 302 al servidor real (Byse / Vidara / Okhd)
-async function realEmbed(o, pageUrl) {
-  const H = { "User-Agent": UA, Referer: pageUrl, "Accept-Language": "es-MX,es;q=0.9" };
-  const r = await kino.fetch(o.url, { headers: H });
-  const t = String(await r.text());
-  const rp = /location\.replace\("([^"]+)"/.exec(t);
-  if (!rp) return null;
-  const next = new URL(rp[1], o.url).href;
-  const r2 = await kino.fetch(next, { headers: Object.assign({}, H, { Referer: o.url }), redirect: "manual" });
-  const loc = hdr(r2, "location");
-  return loc ? new URL(loc, next).href : null;
-}
-
-async function captureOne(o, pageUrl) {
-  const embed = await realEmbed(o, pageUrl);
-  if (!embed) throw new Error("sin redirección");
-  log("embed " + o.label + " -> " + embed.slice(0, 60));
-  if (!kino.browser || typeof kino.browser.capture !== "function") throw new Error("sin navegador");
-  const page = await kino.browser.capture(embed, { timeoutMs: 15000, headers: { Referer: "https://mp4.nu/" } });
-  const media = page && Array.isArray(page.media) ? page.media : [];
-  log("captura " + o.label + ": " + media.length + " medios " + media.slice(0, 3).map((x) => String((x && x.url) || "").slice(0, 70)).join(" ; "));
-  const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !BAD_MEDIA.test(x.url));
-  if (!first) throw new Error("sin medios");
-  const out = { url: first.url, mime: first.mime || first.mimeType || (/\.m3u8(\?|$)/i.test(first.url) ? "application/x-mpegurl" : "video/mp4") };
-  out.headers = first.headers && typeof first.headers === "object" ? first.headers : { Referer: embed };
-  return out;
-}
-
-function firstSuccess(tasks) {
-  return new Promise((done) => {
-    let pending = tasks.length;
-    if (!pending) { done(null); return; }
-    tasks.forEach((t) => {
-      Promise.resolve(t).then((v) => { if (v) done(v); }, (e) => log("falló: " + String((e && e.message) || e).slice(0, 80))).then(() => { if (--pending === 0) done(null); });
-    });
-  });
+  const url = decodeURIComponent(String(ref || "").slice(2));
+  if (!/^https:\/\//i.test(url)) throw fail("not_found", "referencia desconocida", "No se encontró este título.", "Title not found.");
+  const h = await get(url);
+  const t = h.text;
+  log("TÍTULO " + url.slice(0, 80) + " status=" + h.status + " largo=" + t.length);
+  const ep = (t.match(/href="[^"]*(?:episodio|capitulo|temporada|season|episode)[^"]*"/gi) || []).slice(0, 6);
+  ep.forEach((x, i) => log("TÍTULO ep" + i + " " + x.slice(0, 120)));
+  const ifr = (t.match(/<iframe[^>]+src="[^"]+"/gi) || []).slice(0, 4);
+  ifr.forEach((x, i) => log("TÍTULO iframe" + i + " " + x.slice(0, 160)));
+  const js = (t.match(/(?:data-(?:id|post|player|server|src|url)|player_data|embed_url)[^>\n]{0,100}/gi) || []).slice(0, 6);
+  js.forEach((x, i) => log("TÍTULO dato" + i + " " + x.slice(0, 140)));
+  const title = dec((/<title>([^<]*)<\/title>/i.exec(t) || [, ""])[1]).replace(/\s*[|\-–].*$/, "");
+  return { series: { title: title || "Título" }, episodes: [{ season: 1, number: 1, ref: ref, title: tr("Ver", "Watch") }] };
 }
 
 export async function resolve(ref) {
   await null;
-  const p = String(ref || "").split("|");
-  if ((p[0] !== "p" && p[0] !== "m") || !p[1]) throw kino.error("not_found", "referencia desconocida");
-  const pageUrl = SITE + dec(p[1]);
-  const html = await getText(pageUrl);
-  const opts = pageOptions(html);
-  log("opciones: " + opts.length + " -> " + opts.map((o) => o.label).join(" | "));
-  if (!opts.length) throw kino.error("not_found", "sin opciones", { userMessage: tr("Esta película aún no tiene video.", "This movie has no video yet.") });
-  // Primero latino; si no hay, lo que haya.
-  const lat = opts.filter((o) => /latino/i.test(o.label));
-  const pick = (lat.length ? lat : opts).slice(0, 3);
-  const got = await firstSuccess(pick.map((o) => captureOne(o, pageUrl)));
-  if (got) return got;
-  throw kino.error("not_found", "sin video directo", { userMessage: tr("No se pudo obtener el video. Prueba de nuevo.", "Could not get the video. Try again.") });
+  throw fail("unavailable", "prueba", "Esta versión es solo de prueba y todavía no reproduce. Manda el registro.", "This is a test build and does not play yet. Send the log.");
 }
