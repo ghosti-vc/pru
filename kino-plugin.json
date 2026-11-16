@@ -3,7 +3,7 @@
   "name": "Sitios (prueba)",
   "description": "Prueba de sitios de películas y series: revisa cada uno y anota en el log lo que encuentra.",
   "author": "Ghosti-vc",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -22,5 +22,6 @@
     "www.cinehax.com"
   ],
   "fetchHosts": "any",
-  "streamHosts": "any"
+  "streamHosts": "any",
+  "browser": true
 }
