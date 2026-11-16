@@ -1,14 +1,13 @@
 {
-  "id": "pelisforte",
-  "name": "PelisForte",
-  "description": "Películas en español latino, castellano y subtituladas desde PelisForte.",
+  "id": "sitios-prueba",
+  "name": "Sitios (prueba)",
+  "description": "Prueba de sitios de películas y series: revisa cada uno y anota en el log lo que encuentra.",
   "author": "Ghosti-vc",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["www2.pelisforte.se", "mp4.nu"],
+  "hosts": ["sololatino.net", "www.sololatino.net", "fanpelis.to", "cine24h.online", "flixlatam.com", "www.flixlatam.com", "cinehax.com", "www.cinehax.com", "pelisplushd.la", "www.pelisplushd.la"],
   "fetchHosts": "any",
-  "streamHosts": "any",
-  "browser": true
+  "streamHosts": "any"
 }
