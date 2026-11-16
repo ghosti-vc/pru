@@ -253,6 +253,29 @@ function playHeaders(pageUrl) {
   return h;
 }
 
+function hintsOf(html) {
+  const out = [];
+  const re = /(?:<iframe[^>]+src|data-(?:src|url|embed|link|id)|\bfile|\bsource|\burl|\bsrc)\s*[=:]\s*["']([^"']{6,170})["']|((?:fetch|ajax|get|post)\s*\(\s*["'][^"']{4,120}["'])/gi;
+  let m;
+  while ((m = re.exec(html)) && out.length < 8) {
+    const v = m[1] || m[2];
+    if (/\.(?:css|png|jpe?g|gif|svg|webp|ico|woff2?)(?:\?|$)|^data:|schema\.org|googletagmanager|google-analytics/i.test(v)) continue;
+    if (out.indexOf(v) < 0) out.push(v);
+  }
+  return out;
+}
+
+async function captureEmbed(embedUrl, referer, ms) {
+  if (typeof kino.browser !== "object" || !kino.browser || typeof kino.browser.capture !== "function") return null;
+  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms, headers: { Referer: referer } });
+  const media = page && Array.isArray(page.media) ? page.media : [];
+  const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !DEMO.test(x.url));
+  if (!first) return null;
+  const out = { url: first.url, mime: first.mime || first.mimeType || (/\.m3u8(\?|$)/i.test(first.url) ? "application/x-mpegurl" : "video/mp4") };
+  if (first.headers && typeof first.headers === "object") out.headers = first.headers;
+  return out;
+}
+
 async function fromEmbed(url, depth, referer) {
   const r = await kino.fetch(url, { headers: { Referer: referer || url, "User-Agent": UA } });
   log("reproductor " + hostOf(url) + " status=" + r.status);
@@ -266,7 +289,7 @@ async function fromEmbed(url, depth, referer) {
   }
   if (depth === 0 || depth >= 1) {
     const inner0 = innerLinks(html, url);
-    log("sin video directo en " + hostOf(url) + " largo=" + html.length + " enlaces=" + inner0.map((x) => hostOf(x) + x.replace(/^https?:\/\/[^\/]+/, "").slice(0, 30)).join(",") + " muestra=" + html.replace(/\s+/g, " ").slice(0, 160));
+    log("sin video directo en " + hostOf(url) + " largo=" + html.length + " enlaces=" + inner0.map((x) => hostOf(x) + x.replace(/^https?:\/\/[^\/]+/, "").slice(0, 30)).join(",") + " pistas=" + hintsOf(html).join(" ; "));
   }
   if (depth >= 1) return null;
   for (const l of innerLinks(html, url)) {
@@ -335,8 +358,19 @@ export async function resolve(ref) {
     const got = await fromEmbed(e.url, 0, url);
     return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
   })());
+  // Respaldo: reproductores que se arman con JavaScript (streamwish, vidhide...) se abren en el navegador oculto
+  // si en unos segundos nadie entregó video.
+  const JSHOST = /wish|vidhide|filelions|dhcplay|hgcloud|vidara|dintezuvio|minochinos|callistanise|vibuxer|hglink/i;
+  const cands = embeds.filter((e) => JSHOST.test(hostOf(e.url))).slice(0, 2);
+  const capTasks = cands.map((e, i) => (async () => {
+    await sleepUpTo(2500 + i * 500);
+    log("navegador oculto: " + hostOf(e.url));
+    const got = await captureEmbed(e.url, url, 11000);
+    if (got) log("navegador oculto: video en " + hostOf(e.url));
+    return got ? Object.assign(got, { label: e.name || hostOf(e.url) }) : null;
+  })());
   const st = { done: false };
-  const win = await Promise.race([firstSuccess(tasks), sleepUpTo(15000, st).then(() => null)]);
+  const win = await Promise.race([firstSuccess(tasks.concat(capTasks)), sleepUpTo(15000, st).then(() => null)]);
   st.done = true;
   if (win) return win;
   throw fail("unavailable", "sin video", "No se pudo abrir el video de este título. Prueba otro.", "Could not open this title's video. Try another.");
