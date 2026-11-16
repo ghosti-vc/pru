@@ -3,7 +3,7 @@
   "name": "Sitios (prueba)",
   "description": "Prueba de sitios de películas y series: revisa cada uno y anota en el log lo que encuentra.",
   "author": "Ghosti-vc",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
