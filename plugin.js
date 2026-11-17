@@ -134,6 +134,7 @@ export async function episodes(ref) {
 
 // ---- Reproducción: reproductor del sitio dentro del navegador oculto -----------------------------------
 const BAD = /\.(?:jpe?g|png|gif|webp|svg|vtt|srt|ico|css|js|woff2?)(?:\?|$)|doubleclick|googima|googlesyndication|adservice|analytics|beacon|\/thumbnail|sprite/i;
+const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
 const kindOf = (u) => (/\.m3u8(\?|$)|\/hls-proxy\/|\/playlist|\/master/i.test(u) ? 0 : /\.mp4(\?|$)/i.test(u) ? 1 : /\.mpd(\?|$)/i.test(u) ? 2 : 3);
 const mimeOf = (m, u) => m || (/\.m3u8|hls/i.test(u) ? "application/x-mpegurl" : /\.mpd/i.test(u) ? "application/dash+xml" : "video/mp4");
 
@@ -162,14 +163,25 @@ export async function resolve(ref) {
   log("capturados " + media.length + ": " + media.slice(0, 8).map((m) => m.url.replace(/^https?:\/\//, "").slice(0, 70)).join(" | "));
   const good = media.filter((m) => !BAD.test(m.url)).sort((a, b) => kindOf(a.url) - kindOf(b.url));
   if (!good.length) throw kino.error("not_found", "sin video", { userMessage: tr("No se pudo obtener el video. Prueba de nuevo.", "Could not get the video. Try again.") });
-  const f = good[0];
-  const out = { url: f.url, mime: mimeOf(f.mime || f.mimeType, f.url) };
-  // MovieBox (bcdnt) responde 429 a cualquier petición con Referer u Origin: se quitan.
-  if (f.headers && typeof f.headers === "object") {
-    const h = {};
-    Object.keys(f.headers).forEach((k) => { if (!/^(referer|referrer|origin|host|sec-fetch-.*|sec-ch-.*)$/i.test(k)) h[k] = f.headers[k]; });
-    log("cabeceras: " + Object.keys(f.headers).join(",") + " -> " + Object.keys(h).join(","));
-    if (Object.keys(h).length) out.headers = h;
+  const strip = (h) => { const o = {}; Object.keys(h || {}).forEach((k) => { if (!/^(referer|referrer|origin|host|sec-fetch-.*|sec-ch-.*)$/i.test(k)) o[k] = h[k]; }); return o; };
+  const full = (h) => { const o = {}; Object.keys(h || {}).forEach((k) => { if (!/^(host|sec-fetch-.*|sec-ch-.*)$/i.test(k)) o[k] = h[k]; }); return o; };
+  const probe = async (m, h) => {
+    try {
+      const r = await kino.fetch(m.url, { headers: Object.assign({}, h, { Range: "bytes=0-1023" }) });
+      return r.status < 400;
+    } catch (e) { log("sonda " + msg(e)); return false; }
+  };
+  for (const m of good.slice(0, 4)) {
+    const variants = [strip(m.headers), full(m.headers)];
+    let pick = null;
+    if (kindOf(m.url) === 2) pick = variants[1];
+    else for (const v of variants) { if (await probe(m, v)) { pick = v; break; } }
+    log("enlace " + hostOf(m.url) + ": " + (pick ? "ok (" + Object.keys(pick).join(",") + ")" : "rechazado"));
+    if (!pick) continue;
+    const out = { url: m.url, mime: mimeOf(m.mime || m.mimeType, m.url) };
+    if (Object.keys(pick).length) out.headers = pick;
+    return out;
   }
-  return out;
+  throw kino.error("not_found", "sin video reproducible", { userMessage: tr("No se pudo obtener el video. Prueba de nuevo.", "Could not get the video. Try again.") });
 }
+
