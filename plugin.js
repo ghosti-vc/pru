@@ -11,12 +11,31 @@ function dec(s) { try { return decodeURIComponent(s); } catch { return String(s 
 const nn = (x) => (x == null ? "" : String(x));
 
 // ---- TMDB ---------------------------------------------------------------------------------------
+async function unwrapTm(r) {
+  for (let i = 0; i < 4 && r != null; i++) {
+    if (typeof r === "string") { try { r = JSON.parse(r); continue; } catch { return {}; } }
+    if (typeof r.json === "function") { r = await r.json(); continue; }
+    if (r.ok === false && r.status) throw new Error("tmdb " + r.status);
+    if (r.results || r.seasons || r.episodes || r.id) return r;
+    if (r.data != null) { r = r.data; continue; }
+    if (r.body != null) { r = r.body; continue; }
+    return r;
+  }
+  return r || {};
+}
+let tmErr = "";
 async function tm(path, params) {
   if (typeof kino.tmdb !== "function") throw kino.error("unavailable", "kino.tmdb no disponible", { userMessage: tr("Este plugin necesita Kino 0.9.53 o más nuevo.", "This plugin needs Kino 0.9.53 or newer.") });
-  let r = await kino.tmdb(path, Object.assign({ language: kino.lang === "en-US" ? "en-US" : "es-MX" }, params || {}));
-  if (typeof r === "string") r = JSON.parse(r);
-  else if (r && typeof r.json === "function") r = await r.json();
-  return r || {};
+  const p = Object.assign({ language: kino.lang === "en-US" ? "en-US" : "es-MX" }, params || {});
+  const qs = Object.keys(p).map((k) => enc(k) + "=" + enc(p[k])).join("&");
+  const tries = [() => kino.tmdb(path, p), () => kino.tmdb("/" + path, p), () => kino.tmdb(path + "?" + qs), () => kino.tmdb(path)];
+  for (let i = 0; i < tries.length; i++) {
+    try {
+      const d = await unwrapTm(await tries[i]());
+      if (d && typeof d === "object") { if (i) log("tmdb forma " + i + " funciona"); return d; }
+    } catch (e) { tmErr = msg(e); log("tmdb " + path + " (forma " + i + "): " + msg(e)); }
+  }
+  throw new Error("tmdb: " + tmErr);
 }
 
 const year4 = (s) => (/^(\d{4})/.exec(nn(s)) || [])[1] || "";
@@ -65,7 +84,7 @@ export async function home() {
     if (x.status !== "fulfilled") { log("home " + ROWS[i].id + ": " + msg(x.reason)); return; }
     if (x.value.items.length) rows.push({ id: "row-" + ROWS[i].id, title: tr(ROWS[i].title[0], ROWS[i].title[1]), genre: ROWS[i].genre, ref: ROWS[i].id, items: x.value.items.slice(0, 30) });
   });
-  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados", { userMessage: tr("No se pudo cargar el catálogo.", "Could not load the catalog.") });
+  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados", { userMessage: tr("No se pudo cargar el catálogo. ", "Could not load the catalog. ") + tmErr });
   return rows;
 }
 
