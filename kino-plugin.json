@@ -3,7 +3,7 @@
   "name": "Nflix TV",
   "description": "Películas, series, anime y doramas de nflixtv.cc, con catálogo de TMDB.",
   "author": "Ghosti-vc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
