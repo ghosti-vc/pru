@@ -164,6 +164,12 @@ export async function resolve(ref) {
   if (!good.length) throw kino.error("not_found", "sin video", { userMessage: tr("No se pudo obtener el video. Prueba de nuevo.", "Could not get the video. Try again.") });
   const f = good[0];
   const out = { url: f.url, mime: mimeOf(f.mime || f.mimeType, f.url) };
-  if (f.headers && typeof f.headers === "object") out.headers = f.headers;
+  // MovieBox (bcdnt) responde 429 a cualquier petición con Referer u Origin: se quitan.
+  if (f.headers && typeof f.headers === "object") {
+    const h = {};
+    Object.keys(f.headers).forEach((k) => { if (!/^(referer|referrer|origin|host|sec-fetch-.*|sec-ch-.*)$/i.test(k)) h[k] = f.headers[k]; });
+    log("cabeceras: " + Object.keys(f.headers).join(",") + " -> " + Object.keys(h).join(","));
+    if (Object.keys(h).length) out.headers = h;
+  }
   return out;
 }
