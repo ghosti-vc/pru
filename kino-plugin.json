@@ -3,11 +3,20 @@
   "name": "Nflix TV",
   "description": "Películas, series, anime y doramas de nflixtv.cc, con catálogo de TMDB.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["nflixtv.cc", "image.tmdb.org"],
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
+  ],
+  "hosts": [
+    "nflixtv.cc",
+    "image.tmdb.org"
+  ],
   "browser": true,
   "fetchHosts": "any",
   "streamHosts": "any"
