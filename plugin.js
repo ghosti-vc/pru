@@ -28,7 +28,8 @@ async function tm(path, params) {
   if (typeof kino.tmdb !== "function") throw kino.error("unavailable", "kino.tmdb no disponible", { userMessage: tr("Este plugin necesita Kino 0.9.53 o más nuevo.", "This plugin needs Kino 0.9.53 or newer.") });
   const p = Object.assign({ language: kino.lang === "en-US" ? "en-US" : "es-MX" }, params || {});
   const qs = Object.keys(p).map((k) => enc(k) + "=" + enc(p[k])).join("&");
-  const tries = [() => kino.tmdb(path, p), () => kino.tmdb("/" + path, p), () => kino.tmdb(path + "?" + qs), () => kino.tmdb(path)];
+  const sp = "/" + String(path).replace(/^\//, "");
+  const tries = [() => kino.tmdb(sp, p), () => kino.tmdb(path, p), () => kino.tmdb(path + "?" + qs), () => kino.tmdb(path)];
   for (let i = 0; i < tries.length; i++) {
     try {
       const d = await unwrapTm(await tries[i]());
@@ -156,7 +157,7 @@ export async function resolve(ref) {
   if (!kino.browser || typeof kino.browser.capture !== "function") throw kino.error("unavailable", "sin navegador", { userMessage: tr("Este plugin necesita el navegador de Kino.", "This plugin needs Kino's browser.") });
   const url = playerUrl(type, id, season, episode, title);
   log("abriendo reproductor " + type + " " + id + (season ? " " + season + "x" + episode : ""));
-  const page = await kino.browser.capture(url, { timeoutMs: 30000, headers: { "Accept-Language": "es-MX,es;q=0.9" } });
+  const page = await kino.browser.capture(url, { timeoutMs: 25000, headers: { "Accept-Language": "es-MX,es;q=0.9" } });
   const media = (page && Array.isArray(page.media) ? page.media : []).filter((m) => m && typeof m.url === "string" && /^https?:\/\//.test(m.url));
   log("capturados " + media.length + ": " + media.slice(0, 8).map((m) => m.url.replace(/^https?:\/\//, "").slice(0, 70)).join(" | "));
   const good = media.filter((m) => !BAD.test(m.url)).sort((a, b) => kindOf(a.url) - kindOf(b.url));
