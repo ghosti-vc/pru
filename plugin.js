@@ -45,11 +45,23 @@ async function loadList(entry) {
   const key = entry.n + "|" + entry.url;
   if (CACHE[key] && Date.now() - CACHE[key].t < 300000) return CACHE[key].items;
   let r;
-  try {
-    r = await kino.fetch(entry.url, { headers: { "User-Agent": UA, Accept: "*/*" } });
-  } catch (e) {
-    log("lista " + entry.n + " error=" + String((e && e.message) || e).slice(0, 120));
-    throw fail("unavailable", "no se pudo abrir la lista " + entry.n, "No se pudo abrir la lista " + entry.n + ". Revisa que la dirección empiece con https.", "Could not open list " + entry.n + ". Check that the address starts with https.");
+  const tries = [entry.url];
+  if (/^http:\/\//i.test(entry.url)) tries.push(entry.url.replace(/^http:/i, "https:"));
+  let lastErr = "";
+  for (const u of tries) {
+    try {
+      r = await kino.fetch(u, { headers: { "User-Agent": UA, Accept: "*/*" } });
+      if (u !== entry.url) log("lista " + entry.n + ": abrió con https");
+      break;
+    } catch (e) {
+      lastErr = String((e && e.message) || e).slice(0, 120);
+      log("lista " + entry.n + " " + u.split("/")[0] + " error=" + lastErr);
+      r = null;
+    }
+  }
+  if (!r) {
+    const isHttp = /^http:\/\//i.test(entry.url);
+    throw fail("unavailable", "no se pudo abrir la lista " + entry.n, isHttp ? "Kino no deja abrir la lista " + entry.n + " (dirección http). Prueba con la versión https si existe." : "No se pudo abrir la lista " + entry.n + ". Revisa la dirección.", isHttp ? "Kino does not allow opening list " + entry.n + " (http address). Try the https version if it exists." : "Could not open list " + entry.n + ". Check the address.");
   }
   if (!r.ok) {
     log("lista " + entry.n + " status=" + r.status);
@@ -142,7 +154,8 @@ export async function resolve(ref) {
   const c = items[Number(p[1])];
   if (!c) throw fail("not_found", "canal no encontrado", "No se encontró ese canal. Vuelve a abrir la lista.", "Channel not found. Reopen the list.");
   const u = c.url;
-  const mime = /\.m3u8(\?|$)/i.test(u) ? "application/x-mpegurl" : /\.mpd(\?|$)/i.test(u) ? "application/dash+xml" : /\.mp4(\?|$)/i.test(u) ? "video/mp4" : "application/x-mpegurl";
+  const path = u.split("?")[0];
+  const mime = /\.m3u8$/i.test(path) ? "application/x-mpegurl" : /\.mpd$/i.test(path) ? "application/dash+xml" : /\.mp4$/i.test(path) ? "video/mp4" : /\.ts$/i.test(path) || !/\.[A-Za-z0-9]{2,4}$/.test(path) ? "video/mp2t" : "application/x-mpegurl";
   log("canal: " + c.name.slice(0, 40));
   return { url: u, mime, headers: { "User-Agent": UA }, label: c.name.slice(0, 40) };
 }
