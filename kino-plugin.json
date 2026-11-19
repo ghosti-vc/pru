@@ -3,7 +3,7 @@
   "name": "IPTV Listas",
   "description": "Agrega tus propias listas M3U en los ajustes y mira sus canales.",
   "author": "Ghosti-vc",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
