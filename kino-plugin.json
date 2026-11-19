@@ -1,9 +1,9 @@
 {
-  "id": "puente-prueba",
-  "name": "Puente (prueba)",
-  "description": "Prueba si Kino puede conectarse a un programa local de Termux.",
+  "id": "iptv-listas",
+  "name": "IPTV Listas",
+  "description": "Agrega tus propias listas M3U en los ajustes y mira sus canales.",
   "author": "Ghosti-vc",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -14,8 +14,46 @@
     "resolve"
   ],
   "hosts": [
-    "t.me"
+    "iptv-org.github.io",
+    "raw.githubusercontent.com"
   ],
   "fetchHosts": "any",
-  "streamHosts": "any"
+  "streamHosts": "any",
+  "settings": [
+    {
+      "key": "list1",
+      "label": "Lista 1 (enlace M3U https)",
+      "labelEn": "List 1 (M3U https link)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "list2",
+      "label": "Lista 2 (enlace M3U https)",
+      "labelEn": "List 2 (M3U https link)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "list3",
+      "label": "Lista 3 (enlace M3U https)",
+      "labelEn": "List 3 (M3U https link)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "list4",
+      "label": "Lista 4 (enlace M3U https)",
+      "labelEn": "List 4 (M3U https link)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "list5",
+      "label": "Lista 5 (enlace M3U https)",
+      "labelEn": "List 5 (M3U https link)",
+      "type": "text",
+      "default": ""
+    }
+  ]
 }
