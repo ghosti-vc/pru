@@ -16,7 +16,9 @@ function listUrls() {
     if (u) out.push({ n: i, url: u });
   }
   // Servidor con usuario y clave (formato habitual de proveedores IPTV): se arma la lista sola.
-  const sv = cfg("xt_server").replace(/\/+$/, "");
+  let sv = cfg("xt_server").replace(/\/+$/, "");
+  if (sv && !/^https?:\/\//i.test(sv)) sv = "http://" + sv;
+  if (sv && !/^https?:\/\/[^\/:]+[.:][^\/]*$/i.test(sv.replace(/\/.*$/, "")) && !/^https?:\/\/[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:\d+)?$/i.test(sv)) { log("servidor no válido: escribe algo como http://servidor.com:8080"); sv = ""; }
   const us = cfg("xt_user");
   const pw = cfg("xt_pass");
   if (sv && us && pw) out.push({ n: 6, url: sv + "/get.php?username=" + encodeURIComponent(us) + "&password=" + encodeURIComponent(pw) + "&type=m3u_plus&output=ts" });
@@ -59,7 +61,7 @@ async function loadList(entry) {
       if (u !== entry.url) log("lista " + entry.n + ": abrió con https");
       break;
     } catch (e) {
-      lastErr = String((e && e.message) || e).slice(0, 120);
+      lastErr = String((e && e.message) || e).replace(/(password|pass|pwd|token|key)=[^&\s]+/gi, "$1=***").replace(/(username|user)=[^&\s]+/gi, "$1=***").slice(0, 120);
       log("lista " + entry.n + " " + u.split("/")[0] + " error=" + lastErr);
       r = null;
     }
