@@ -3,7 +3,7 @@
   "name": "Telegram Canales",
   "description": "Videos de canales públicos de Telegram: escribe canal y una palabra en el buscador.",
   "author": "Ghosti-vc",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
