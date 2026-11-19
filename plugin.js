@@ -79,7 +79,8 @@ async function channelVideos(channel, before, want) {
   for (let i = 0; i < 3 && items.length < want; i++) {
     const html = await getText("https://t.me/s/" + channel + (b ? "?before=" + b : ""));
     if (html.indexOf("tgme_widget_message") < 0) {
-      if (!items.length && i === 0) throw fail("not_found", "sin publicaciones", "Ese canal no existe o no es público.", "That channel does not exist or is not public.");
+      log("sin publicaciones: " + channel + " largo=" + html.length + " inicio=" + html.slice(0, 160).replace(/\s+/g, " "));
+      if (!items.length && i === 0) throw fail("not_found", "sin publicaciones", "Ese canal no existe, no es público o no permite verse desde la web.", "That channel does not exist, is not public, or cannot be viewed on the web.");
       break;
     }
     const got = posts(html, channel);
@@ -115,7 +116,8 @@ export async function search(arg) {
   await null;
   const q = String((arg && (arg.q || arg.query)) || "").trim();
   const ch = channelOf(q);
-  if (!ch) return [];
+  log("buscar texto=" + q.slice(0, 40) + " canal=" + (ch || "(no válido)"));
+  if (!ch) throw fail("not_found", "nombre no válido", "Escribe solo el nombre del canal, sin espacios. Ejemplo: micanal", "Type only the channel name, no spaces. Example: mychannel");
   const res = await channelVideos(ch, 0, 20);
   log("buscar " + ch + " -> " + res.items.length);
   return res.items;
