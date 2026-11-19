@@ -1,36 +1,148 @@
-// Prueba del puente 0.1.0: comprueba si Kino deja conectarse a un programa local (Termux).
-const URLS = ["http://127.0.0.1:8765/ping", "http://localhost:8765/ping"];
+// IPTV Listas 0.1.0 — agrega tus propias listas M3U (ajustes del plugin) y mira los canales.
+// No trae listas incluidas. Solo reproduce lo que cada lista ofrece como enlace directo.
+const UA = "Mozilla/5.0 (Linux; Android 13; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
+const MAX_LISTS = 5;
+const CACHE = {};
 
 function log(...a) { try { kino.log(...a); } catch (e) { /* no romper */ } }
 function tr(es, en) { return kino.lang === "en-US" ? en : es; }
 function fail(code, detail, es, en) { return kino.error(code, detail, { userMessage: tr(es, en) }); }
+function cfg(key) { try { return String(kino.config.get(key) || "").trim(); } catch (e) { return ""; } }
 
-async function probe() {
-  const notes = [];
-  for (const u of URLS) {
-    try {
-      const r = await kino.fetch(u, { headers: { Accept: "application/json" } });
-      const t = await r.text();
-      log("prueba " + u + " status=" + r.status + " cuerpo=" + t.slice(0, 80));
-      if (r.ok) return { ok: true, text: t, url: u };
-      notes.push("status " + r.status);
-    } catch (e) {
-      const m = String((e && e.message) || e).slice(0, 120);
-      log("prueba " + u + " error=" + m);
-      notes.push(m);
+function listUrls() {
+  const out = [];
+  for (let i = 1; i <= MAX_LISTS; i++) {
+    const u = cfg("list" + i);
+    if (u) out.push({ n: i, url: u });
+  }
+  return out;
+}
+
+function parseM3u(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const out = [];
+  let cur = null;
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (l.indexOf("#EXTINF") === 0) {
+      const name = (l.split(",").slice(1).join(",") || "").trim();
+      const grp = /group-title="([^"]*)"/i.exec(l);
+      const logo = /tvg-logo="([^"]*)"/i.exec(l);
+      cur = { name: name || (/tvg-name="([^"]*)"/i.exec(l) || [, ""])[1], group: grp ? grp[1].trim() : "", logo: logo ? logo[1].trim() : "" };
+    } else if (l.charAt(0) !== "#") {
+      if (/^https?:\/\//i.test(l)) {
+        const c = cur || { name: "", group: "", logo: "" };
+        out.push({ name: c.name || l.slice(0, 40), group: c.group || "Sin grupo", logo: c.logo, url: l });
+      }
+      cur = null;
     }
   }
-  return { ok: false, notes };
+  return out;
+}
+
+async function loadList(entry) {
+  const key = entry.n + "|" + entry.url;
+  if (CACHE[key] && Date.now() - CACHE[key].t < 300000) return CACHE[key].items;
+  let r;
+  try {
+    r = await kino.fetch(entry.url, { headers: { "User-Agent": UA, Accept: "*/*" } });
+  } catch (e) {
+    log("lista " + entry.n + " error=" + String((e && e.message) || e).slice(0, 120));
+    throw fail("unavailable", "no se pudo abrir la lista " + entry.n, "No se pudo abrir la lista " + entry.n + ". Revisa que la dirección empiece con https.", "Could not open list " + entry.n + ". Check that the address starts with https.");
+  }
+  if (!r.ok) {
+    log("lista " + entry.n + " status=" + r.status);
+    throw fail("unavailable", "status " + r.status, "La lista " + entry.n + " respondió con el error " + r.status + ".", "List " + entry.n + " answered with error " + r.status + ".");
+  }
+  const t = await r.text();
+  const items = parseM3u(t);
+  log("lista " + entry.n + ": canales=" + items.length);
+  if (!items.length) throw fail("not_found", "lista vacía", "La lista " + entry.n + " no tiene canales que se puedan leer.", "List " + entry.n + " has no readable channels.");
+  CACHE[key] = { t: Date.now(), items };
+  return items;
+}
+
+function toItem(n, i, c) {
+  return { id: "l" + n + "-" + i, ref: n + "|" + i, title: c.name.slice(0, 120), kind: "movie", genres: ["iptv"], poster: /^https:\/\//i.test(c.logo) ? c.logo : undefined };
+}
+
+function groupsOf(items) {
+  const g = {};
+  items.forEach((c, i) => { (g[c.group] = g[c.group] || []).push(i); });
+  return g;
 }
 
 export async function home() {
   await null;
-  const p = await probe();
-  if (!p.ok) throw fail("unavailable", "sin conexión local", "Kino no pudo hablar con el puente de Termux. Mira el log.", "Kino could not reach the Termux bridge. Check the log.");
-  return [{ id: "row-puente", title: "Puente", genre: "prueba", ref: "p", items: [{ id: "puente-ok", ref: "ok|1", title: tr("Puente conectado", "Bridge connected"), kind: "movie", genres: ["prueba"] }] }];
+  const lists = listUrls();
+  if (!lists.length) throw fail("unavailable", "sin listas", "Agrega una lista M3U en los ajustes del plugin.", "Add an M3U list in the plugin settings.");
+  const rows = [];
+  for (const e of lists) {
+    try {
+      const items = await loadList(e);
+      const g = groupsOf(items);
+      const names = Object.keys(g).sort((a, b) => g[b].length - g[a].length);
+      if (names.length <= 1) {
+        rows.push({ id: "row-l" + e.n, title: tr("Lista ", "List ") + e.n, genre: "iptv", ref: "L|" + e.n + "|", items: items.slice(0, 40).map((c, i) => toItem(e.n, i, c)) });
+      } else {
+        names.slice(0, 8).forEach((nm, k) => {
+          rows.push({ id: "row-l" + e.n + "-" + k, title: (lists.length > 1 ? e.n + ": " : "") + nm, genre: "iptv", ref: "L|" + e.n + "|" + nm, items: g[nm].slice(0, 40).map((i) => toItem(e.n, i, items[i])) });
+        });
+      }
+    } catch (err) {
+      log("inicio: falló la lista " + e.n);
+    }
+  }
+  if (!rows.length) throw fail("unavailable", "ninguna lista abrió", "No se pudo abrir ninguna lista. Revisa las direcciones en los ajustes.", "No list could be opened. Check the addresses in settings.");
+  return rows;
 }
-export async function browse() { await null; return { items: [] }; }
-export async function search() { await null; return []; }
-export async function episodes(ref) { await null; return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: String(ref), title: "Prueba" }] }; }
-export async function resolve() { await null; throw fail("unavailable", "solo es una prueba", "Esto es solo una prueba de conexión.", "This is only a connection test."); }
- 
+
+export async function browse(ref, cursor) {
+  await null;
+  const p = String(ref || "").split("|");
+  if (p[0] !== "L") return { items: [] };
+  const e = listUrls().find((x) => String(x.n) === p[1]);
+  if (!e) return { items: [] };
+  const items = await loadList(e);
+  const g = p.slice(2).join("|");
+  const idx = [];
+  items.forEach((c, i) => { if (!g || c.group === g) idx.push(i); });
+  const start = Number(cursor) || 0;
+  const page = idx.slice(start, start + 60);
+  return { items: page.map((i) => toItem(e.n, i, items[i])), nextCursor: start + 60 < idx.length ? String(start + 60) : undefined };
+}
+
+export async function search(arg) {
+  await null;
+  const q = String((arg && (arg.q || arg.query)) || "").trim().toLowerCase();
+  if (!q) return [];
+  const out = [];
+  for (const e of listUrls()) {
+    try {
+      const items = await loadList(e);
+      items.forEach((c, i) => { if (out.length < 60 && c.name.toLowerCase().indexOf(q) >= 0) out.push(toItem(e.n, i, c)); });
+    } catch (err) { log("buscar: falló la lista " + e.n); }
+  }
+  log("buscar " + q.slice(0, 30) + " -> " + out.length);
+  return out;
+}
+
+export async function episodes(ref) {
+  await null;
+  return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: String(ref), title: tr("En vivo", "Live") }] };
+}
+
+export async function resolve(ref) {
+  await null;
+  const p = String(ref || "").split("|");
+  const e = listUrls().find((x) => String(x.n) === p[0]);
+  if (!e) throw fail("not_found", "lista no encontrada", "Esa lista ya no está en los ajustes.", "That list is no longer in settings.");
+  const items = await loadList(e);
+  const c = items[Number(p[1])];
+  if (!c) throw fail("not_found", "canal no encontrado", "No se encontró ese canal. Vuelve a abrir la lista.", "Channel not found. Reopen the list.");
+  const u = c.url;
+  const mime = /\.m3u8(\?|$)/i.test(u) ? "application/x-mpegurl" : /\.mpd(\?|$)/i.test(u) ? "application/dash+xml" : /\.mp4(\?|$)/i.test(u) ? "video/mp4" : "application/x-mpegurl";
+  log("canal: " + c.name.slice(0, 40));
+  return { url: u, mime, headers: { "User-Agent": UA }, label: c.name.slice(0, 40) };
+}
