@@ -1,9 +1,9 @@
 {
-  "id": "iptv-listas",
-  "name": "IPTV Listas",
-  "description": "Agrega tus propias listas M3U en los ajustes y mira sus canales.",
+  "id": "pelis-tv",
+  "name": "Pelis TV",
+  "description": "Películas, series, anime, series turcas y caricaturas en español desde muchas fuentes.",
   "author": "Ghosti-vc",
-  "version": "0.1.4",
+  "version": "0.8.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -14,67 +14,25 @@
     "resolve"
   ],
   "hosts": [
-    "iptv-org.github.io",
-    "raw.githubusercontent.com"
+    "pelisjuanita.org",
+    "www.pelisjuanita.org",
+    "hackstore3.net",
+    "www.fuegocine.com",
+    "pelisflix200.store",
+    "image.tmdb.org",
+    "www.poseidonhd2.co",
+    "player.poseidonhd2.co",
+    "wv3.cuevana3.eu",
+    "www.pelisplushd.la",
+    "tioplus.app",
+    "www.cinecalidad.am",
+    "www3.seriesmetro.net",
+    "www.lacartoons.com",
+    "tbg.seriesturcastv.to",
+    "seriesflixhd.lol",
+    "pelisflixhd.win"
   ],
+  "browser": true,
   "fetchHosts": "any",
-  "streamHosts": "any",
-  "settings": [
-    {
-      "key": "list1",
-      "label": "Lista 1 (enlace M3U)",
-      "labelEn": "List 1 (M3U link)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "list2",
-      "label": "Lista 2 (enlace M3U)",
-      "labelEn": "List 2 (M3U link)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "list3",
-      "label": "Lista 3 (enlace M3U)",
-      "labelEn": "List 3 (M3U link)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "list4",
-      "label": "Lista 4 (enlace M3U)",
-      "labelEn": "List 4 (M3U link)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "list5",
-      "label": "Lista 5 (enlace M3U)",
-      "labelEn": "List 5 (M3U link)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "xt_server",
-      "label": "Servidor (con puerto, opcional)",
-      "labelEn": "Server (with port, optional)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "xt_user",
-      "label": "Usuario (opcional)",
-      "labelEn": "Username (optional)",
-      "type": "text",
-      "default": ""
-    },
-    {
-      "key": "xt_pass",
-      "label": "Clave (opcional)",
-      "labelEn": "Password (optional)",
-      "type": "text",
-      "default": ""
-    }
-  ]
+  "streamHosts": "any"
 }
