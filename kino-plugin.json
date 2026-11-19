@@ -3,11 +3,27 @@
   "name": "Telegram Canales",
   "description": "Videos de canales públicos de Telegram: escribe el nombre del canal en el buscador.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["t.me", "telegram.org", "cdn-telegram.org", "telesco.pe", "cdn1.telesco.pe", "cdn2.telesco.pe", "cdn3.telesco.pe", "cdn4.telesco.pe", "cdn5.telesco.pe"],
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
+  ],
+  "hosts": [
+    "t.me",
+    "telegram.org",
+    "cdn-telegram.org",
+    "telesco.pe",
+    "cdn1.telesco.pe",
+    "cdn2.telesco.pe",
+    "cdn3.telesco.pe",
+    "cdn4.telesco.pe",
+    "cdn5.telesco.pe"
+  ],
   "fetchHosts": "any",
   "streamHosts": "any"
 }
