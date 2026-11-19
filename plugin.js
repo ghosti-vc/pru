@@ -22,6 +22,7 @@ function channelOf(q) {
   let s = String(q || "").trim();
   s = s.replace(/^https?:\/\//i, "").replace(/^(?:www\.)?t\.me\//i, "").replace(/^s\//i, "").replace(/^@/, "");
   s = s.split(/[\/?#\s]/)[0];
+  try { s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) { /* sin acentos si no se puede */ }
   return /^[A-Za-z0-9_]{4,32}$/.test(s) ? s : "";
 }
 
