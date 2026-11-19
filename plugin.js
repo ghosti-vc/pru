@@ -72,12 +72,15 @@ function minId(html) {
 }
 
 // Trae hasta `pages` páginas hacia atrás hasta juntar suficientes videos.
-async function channelVideos(channel, before, want) {
+async function channelVideos(channel, before, want, term) {
   const items = [];
   let b = before || 0;
   let last = 0;
   for (let i = 0; i < 3 && items.length < want; i++) {
-    const html = await getText("https://t.me/s/" + channel + (b ? "?before=" + b : ""));
+    const qs = [];
+    if (term) qs.push("q=" + encodeURIComponent(term));
+    if (b) qs.push("before=" + b);
+    const html = await getText("https://t.me/s/" + channel + (qs.length ? "?" + qs.join("&") : ""));
     if (html.indexOf("tgme_widget_message") < 0) {
       log("sin publicaciones: " + channel + " largo=" + html.length + " inicio=" + html.slice(0, 160).replace(/\s+/g, " "));
       if (!items.length && i === 0) throw fail("not_found", "sin publicaciones", "Ese canal no existe, no es público o no permite verse desde la web.", "That channel does not exist, is not public, or cannot be viewed on the web.");
@@ -98,7 +101,7 @@ export async function home() {
   await null;
   return [{
     id: "row-tg", title: "Telegram", genre: "telegram", ref: "help",
-    items: [{ id: "tg-ayuda", ref: "help|0", title: tr("Escribe el nombre de un canal en el buscador", "Type a channel name in search"), kind: "movie", genres: ["telegram"] }],
+    items: [{ id: "tg-ayuda", ref: "help|0", title: tr("Escribe: nombre_del_canal palabra", "Type: channel_name word"), kind: "movie", genres: ["telegram"] }],
   }];
 }
 
@@ -115,10 +118,13 @@ export async function browse(ref, cursor) {
 export async function search(arg) {
   await null;
   const q = String((arg && (arg.q || arg.query)) || "").trim();
-  const ch = channelOf(q);
-  log("buscar texto=" + q.slice(0, 40) + " canal=" + (ch || "(no válido)"));
-  if (!ch) throw fail("not_found", "nombre no válido", "Escribe solo el nombre del canal, sin espacios. Ejemplo: micanal", "Type only the channel name, no spaces. Example: mychannel");
-  const res = await channelVideos(ch, 0, 20);
+  // "canal" o "canal palabras": la primera palabra es el canal, el resto filtra sus publicaciones.
+  const sp = q.split(/\s+/);
+  const ch = channelOf(sp[0]);
+  const term = sp.slice(1).join(" ").trim();
+  log("buscar texto=" + q.slice(0, 40) + " canal=" + (ch || "(no válido)") + (term ? " filtro=" + term.slice(0, 30) : ""));
+  if (!ch) throw fail("not_found", "nombre no válido", "Escribe primero el nombre del canal (sin espacios) y luego la palabra. Ejemplo: micanal avatar", "Type the channel name first (no spaces), then the word. Example: mychannel avatar");
+  const res = await channelVideos(ch, 0, 20, term);
   log("buscar " + ch + " -> " + res.items.length);
   return res.items;
 }
