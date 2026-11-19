@@ -1,29 +1,13 @@
 {
-  "id": "telegram-canales",
-  "name": "Telegram Canales",
-  "description": "Videos de canales públicos de Telegram: escribe canal y una palabra en el buscador.",
+  "id": "puente-prueba",
+  "name": "Puente (prueba)",
+  "description": "Prueba si Kino puede conectarse a un programa local de Termux.",
   "author": "Ghosti-vc",
-  "version": "0.1.3",
+  "version": "0.1.0",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": [
-    "home",
-    "browse",
-    "search",
-    "episodes",
-    "resolve"
-  ],
-  "hosts": [
-    "t.me",
-    "telegram.org",
-    "cdn-telegram.org",
-    "telesco.pe",
-    "cdn1.telesco.pe",
-    "cdn2.telesco.pe",
-    "cdn3.telesco.pe",
-    "cdn4.telesco.pe",
-    "cdn5.telesco.pe"
-  ],
+  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
+  "hosts": ["127.0.0.1", "localhost"],
   "fetchHosts": "any",
   "streamHosts": "any"
 }
