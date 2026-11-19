@@ -33,3 +33,4 @@ export async function browse() { await null; return { items: [] }; }
 export async function search() { await null; return []; }
 export async function episodes(ref) { await null; return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: String(ref), title: "Prueba" }] }; }
 export async function resolve() { await null; throw fail("unavailable", "solo es una prueba", "Esto es solo una prueba de conexión.", "This is only a connection test."); }
+ 
