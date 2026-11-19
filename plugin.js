@@ -15,6 +15,11 @@ function listUrls() {
     const u = cfg("list" + i);
     if (u) out.push({ n: i, url: u });
   }
+  // Servidor con usuario y clave (formato habitual de proveedores IPTV): se arma la lista sola.
+  const sv = cfg("xt_server").replace(/\/+$/, "");
+  const us = cfg("xt_user");
+  const pw = cfg("xt_pass");
+  if (sv && us && pw) out.push({ n: 6, url: sv + "/get.php?username=" + encodeURIComponent(us) + "&password=" + encodeURIComponent(pw) + "&type=m3u_plus&output=ts" });
   return out;
 }
 
