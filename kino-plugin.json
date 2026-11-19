@@ -3,7 +3,7 @@
   "name": "IPTV Listas",
   "description": "Agrega tus propias listas M3U en los ajustes y mira sus canales.",
   "author": "Ghosti-vc",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -52,6 +52,27 @@
       "key": "list5",
       "label": "Lista 5 (enlace M3U)",
       "labelEn": "List 5 (M3U link)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "xt_server",
+      "label": "Servidor (con puerto, opcional)",
+      "labelEn": "Server (with port, optional)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "xt_user",
+      "label": "Usuario (opcional)",
+      "labelEn": "Username (optional)",
+      "type": "text",
+      "default": ""
+    },
+    {
+      "key": "xt_pass",
+      "label": "Clave (opcional)",
+      "labelEn": "Password (optional)",
       "type": "text",
       "default": ""
     }
