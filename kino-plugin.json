@@ -1,9 +1,9 @@
 {
   "id": "telegram-canales",
   "name": "Telegram Canales",
-  "description": "Videos de canales públicos de Telegram: escribe el nombre del canal en el buscador.",
+  "description": "Videos de canales públicos de Telegram: escribe canal y una palabra en el buscador.",
   "author": "Ghosti-vc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
