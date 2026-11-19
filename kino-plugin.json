@@ -3,11 +3,19 @@
   "name": "Puente (prueba)",
   "description": "Prueba si Kino puede conectarse a un programa local de Termux.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["127.0.0.1", "localhost"],
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
+  ],
+  "hosts": [
+    "t.me"
+  ],
   "fetchHosts": "any",
   "streamHosts": "any"
 }
