@@ -1,14 +1,27 @@
 {
-  "id": "pelismart",
-  "name": "PelisMart",
-  "description": "Películas, series, animes y doramas de PelisMart.",
+  "id": "pelis-max",
+  "name": "Pelis Max",
+  "description": "Películas, series y anime en español (Latino primero) desde PelisGO, Reypelis, Pelis182 y OnlyPelis en un solo lugar.",
   "author": "Ghosti-vc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["pelismart.mov", "image.tmdb.org"],
+  "capabilities": [
+    "home",
+    "browse",
+    "search",
+    "episodes",
+    "resolve"
+  ],
+  "hosts": [
+    "pelisgo.online",
+    "reypelis.net",
+    "pelis182.net",
+    "onlypelis.com",
+    "image.tmdb.org",
+    "paulinito.com"
+  ],
+  "browser": true,
   "fetchHosts": "any",
-  "streamHosts": "any",
-  "browser": true
+  "streamHosts": "any"
 }
