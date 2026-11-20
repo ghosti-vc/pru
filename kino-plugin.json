@@ -1,9 +1,9 @@
 {
   "id": "pelis-max",
   "name": "Pelis Max",
-  "description": "Películas, series y anime desde PelisGO, Reypelis, Pelis182 y OnlyPelis en un solo lugar.",
+  "description": "Películas, series y anime en español desde PelisGO, Reypelis, Pelis182 y OnlyPelis en un solo lugar.",
   "author": "Ghosti-vc",
-  "version": "0.1.10",
+  "version": "0.1.4",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
