@@ -1608,65 +1608,102 @@ async function episodesOne(raw) {
   throw kino.error("not_found", "referencia desconocida");
 }
 
-// Separa las fuentes del título y, si hace falta, busca el mismo título en las fuentes que aún no están.
-async function expandRefs(raw) {
+// Separa las fuentes del título (sin esperar nada).
+function splitRefs(raw) {
   const parts = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter(Boolean);
   const refs = parts.filter((x) => x.indexOf("tt:") !== 0);
   const tt = parts.find((x) => x.indexOf("tt:") === 0);
-  if (!tt) return { refs, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
-  const tp = tt.split(":");
-  const title = dec(tp[1] || "");
-  const kind = tp[2] === "m" ? "m" : "s";
+  if (!tt) return { refs, tt: null, kind: refs[0] && refs[0].split("|")[1] === "m" ? "m" : "s" };
+  return { refs, tt, kind: tt.split(":")[2] === "m" ? "m" : "s" };
+}
+
+// Busca el mismo título en las fuentes que aún no están; devuelve solo las referencias nuevas.
+async function findMoreRefs(tt, refs, kind, ms) {
+  const out = [];
   const have = new Set(refs.map((r) => r.slice(0, 2)));
   try {
+    const title = dec(tt.split(":")[1] || "");
     const qa = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¡!¿?:,.]/g, " ").replace(/\s+/g, " ").trim();
     const want = normTitle(title);
     if (qa && want) {
-      const found = await searchAll(qa, 7000);
+      const found = await searchAll(qa, ms);
       for (const it of found) {
         const src = it.ref.slice(0, 2);
         if (have.has(src) || (it.kind === "movie") !== (kind === "m") || normTitle(it.title) !== want) continue;
         have.add(src);
-        refs.push(it.ref);
+        out.push(it.ref);
       }
     }
   } catch (e) { log("buscar en otras fuentes falló: " + String((e && e.message) || e).slice(0, 60)); }
-  refs.sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0));
-  log("fuentes para este título: " + refs.map((r) => r.slice(0, 2)).join(","));
-  return { refs: refs.slice(0, 8), kind };
+  return out;
 }
+
+const epCache = new Map(); // título -> { t, value }: al volver a abrir una serie, la lista sale al instante
 
 export async function episodes(ref) {
   await null;
   const raw = String(ref || "");
-  const { refs, kind } = await expandRefs(raw);
-  if (!refs.length) throw kino.error("not_found", "referencia desconocida");
-  // Película: un solo capítulo que recuerda todas las fuentes.
-  if (kind === "m" || refs.every((r) => r.split("|")[1] === "m")) {
-    return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + refs.join("||"), title: tr("Película", "Movie") }] };
+  const hit = epCache.get(raw);
+  if (hit && Date.now() - hit.t < 10 * 60 * 1000) { log("episodios: lista en caché"); return hit.value; }
+  const { refs: known, tt, kind } = splitRefs(raw);
+  if (!known.length && !tt) throw kino.error("not_found", "referencia desconocida");
+
+  // Película: un solo capítulo que recuerda todas las fuentes (la búsqueda extra se limita a 3,5 s).
+  if (kind === "m" || (known.length && known.every((r) => r.split("|")[1] === "m"))) {
+    const more = tt ? await findMoreRefs(tt, known, "m", 3500) : [];
+    const all = known.concat(more).sort((a, b) => (SRC_PRIO[a.slice(0, 2)] || 0) - (SRC_PRIO[b.slice(0, 2)] || 0)).slice(0, 8);
+    if (!all.length) throw kino.error("not_found", "referencia desconocida");
+    return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "mx|" + all.join("||"), title: tr("Película", "Movie") }] };
   }
-  const res = await Promise.allSettled(refs.map((r) => withTimeout(episodesOne(r), 14000)));
+
+  // Serie: las fuentes ya conocidas empiezan a cargar YA, a la vez que se buscan las demás.
+  const jobs = []; // { ref, done, value }
+  const launch = (r) => {
+    const j = { ref: r, done: false, value: null };
+    j.p = withTimeout(episodesOne(r), 12000).then((v) => { j.value = v; }, (e) => { log("episodios: falló " + r.slice(0, 2) + " " + String((e && e.message) || e).slice(0, 40)); }).then(() => { j.done = true; });
+    jobs.push(j);
+  };
+  known.forEach(launch);
+  let searching = !!tt;
+  if (tt) {
+    findMoreRefs(tt, known, "s", 3500).then((more) => { more.forEach(launch); }).catch(() => {}).then(() => { searching = false; });
+  }
+  const okJob = (j) => j.done && j.value && j.value.episodes && j.value.episodes.length;
+  // En cuanto UNA fuente entrega capítulos se espera solo un momento más (1,8 s) a las demás para sumar
+  // alternativas de reproducción; no se espera a la más lenta.
+  const t0 = Date.now();
+  let firstAt = 0;
+  while (Date.now() - t0 < 16000) {
+    const pend = jobs.some((j) => !j.done) || searching;
+    if (!pend) break;
+    if (!firstAt && jobs.some(okJob)) firstAt = Date.now();
+    if (firstAt && Date.now() - firstAt > 1800) break;
+    await kino.sleep(150);
+  }
+  const ok = jobs.filter(okJob);
   let best = null;
   let bestI = -1;
-  res.forEach((r, i) => {
-    if (r.status !== "fulfilled" || !r.value || !r.value.episodes.length) { log("episodios: falló " + refs[i].slice(0, 2)); return; }
-    log("episodios: " + refs[i].slice(0, 2) + "=" + r.value.episodes.length);
-    if (!best || r.value.episodes.length > best.episodes.length) { best = r.value; bestI = i; }
+  ok.forEach((j, i) => {
+    log("episodios: " + j.ref.slice(0, 2) + "=" + j.value.episodes.length);
+    if (!best || j.value.episodes.length > best.episodes.length) { best = j.value; bestI = i; }
   });
   if (!best) throw kino.error("not_found", "sin capítulos", { userMessage: tr("No se encontró la lista de capítulos de este título.", "No episode list found for this title.") });
-  const byKey = res.map((r) => {
+  const byKey = ok.map((j) => {
     const m = new Map();
-    if (r.status === "fulfilled" && r.value) for (const e of r.value.episodes) m.set(e.season + "x" + e.number, e.ref);
+    for (const e of j.value.episodes) m.set(e.season + "x" + e.number, e.ref);
     return m;
   });
   const eps = best.episodes.map((e) => {
     const alts = [e.ref];
     byKey.forEach((m, i) => { if (i !== bestI) { const o = m.get(e.season + "x" + e.number); if (o && alts.indexOf(o) < 0) alts.push(o); } });
     alts.sort((x, y) => (SRC_PRIO[x.slice(0, 2)] || 0) - (SRC_PRIO[y.slice(0, 2)] || 0));
-    return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.join("||") }) : e;
+    return alts.length > 1 ? Object.assign({}, e, { ref: "mx|" + alts.slice(0, 8).join("||") }) : e;
   });
-  eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  return Object.assign({}, best, { episodes: eps });
+  eps.sort((x, y) => (x.season - y.season) || (x.number - y.number));
+  const value = Object.assign({}, best, { episodes: eps });
+  epCache.set(raw, { t: Date.now(), value });
+  log("episodios: lista lista en " + (Date.now() - t0) + " ms (" + ok.length + " fuentes)");
+  return value;
 }
 
 // ---- Reproducción -------------------------------------------------------------------------------
