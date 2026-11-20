@@ -41,8 +41,8 @@ const TRANSPARENT = "#00000000";
 const SIZES = ["small", "normal", "large", "xlarge"];
 
 // Opacidad de la hora fija (ajuste "fixedOpacity", en %): el valor es el canal alfa que se le agrega al color (#RRGGBBAA).
-// Kino nunca dibuja una letra con menos de la mitad de opacidad, por eso el ajuste llega solo hasta 70 %.
-const OPACITY_ALPHA = { 95: "F2", 90: "E6", 85: "D9", 80: "CC", 75: "BF", 70: "B3" };
+// Kino nunca dibuja una letra con menos de la mitad de opacidad (un alfa menor se sube a la mitad), por eso el ajuste llega solo hasta 50 %.
+const OPACITY_ALPHA = { 75: "BF", 50: "80" };
 
 // Si el reloj se mueve hacia el lado contrario, cambia -1 por 1.
 const LEFT_SIGN = -1;
