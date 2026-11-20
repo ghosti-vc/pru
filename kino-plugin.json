@@ -1,7 +1,7 @@
 {
   "id": "reloj-kino",
   "name": "Reloj",
-  "version": "0.9.141",
+  "version": "0.9.142",
   "apiVersion": 23,
   "entry": "plugin.js",
   "description": "Ve el reloj en la esquina superior derecha del reproductor en la TV cada que veas canales en vivo, pelicuals o series sin interrumpir la reproduccion. En el inicio se puede ver al presionar el simbolo de reloj en la pantalla de ajustes (plugins), Se agrega la opcion de poder ver la hora en que terminara tu pelicula o serie en la parte superior derecha activala en ajustes (desactivada por defecto)",
@@ -208,8 +208,8 @@
       "labelEn": "Fixed clock opacity",
       "type": "select",
       "default": "100",
-      "hint": "Solo cuando el reloj está en «Siempre visible».",
-      "hintEn": "Only when the clock is set to \"Always visible\".",
+      "hint": "Solo cuando el reloj está en «Siempre visible». Kino no deja bajar de 50 %.",
+      "hintEn": "Only when the clock is set to \"Always visible\". Kino does not allow going below 50%.",
       "options": [
         {
           "value": "100",
@@ -217,34 +217,14 @@
           "labelEn": "100% (default)"
         },
         {
-          "value": "95",
-          "label": "95 %",
-          "labelEn": "95%"
-        },
-        {
-          "value": "90",
-          "label": "90 %",
-          "labelEn": "90%"
-        },
-        {
-          "value": "85",
-          "label": "85 %",
-          "labelEn": "85%"
-        },
-        {
-          "value": "80",
-          "label": "80 %",
-          "labelEn": "80%"
-        },
-        {
           "value": "75",
           "label": "75 %",
           "labelEn": "75%"
         },
         {
-          "value": "70",
-          "label": "70 %",
-          "labelEn": "70%"
+          "value": "50",
+          "label": "50 %",
+          "labelEn": "50%"
         }
       ]
     },
