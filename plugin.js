@@ -551,16 +551,7 @@ function langRank(s) {
   return 2;
 }
 const jsonStr = (s) => { try { return JSON.parse('"' + s + '"'); } catch (e) { return String(s || ""); } };
-// Carátulas ligeras: las tarjetas son pequeñas, así que se piden en 342 px (TMDB) en vez de 500/768/1280 px.
-// OnlyPelis y Reypelis guardan copias grandes de la misma imagen de TMDB: se pide directo a TMDB.
-function posterUrl(p) {
-  p = String(p || "");
-  if (p.startsWith("//")) p = "https:" + p;
-  if (!/^https?:\/\//i.test(p)) return undefined;
-  const up = /\/wp-content\/uploads\/[^?#]*?\/([A-Za-z0-9]{27})(?:-\d+x\d+)?\.(?:jpe?g|webp)(?:[?#].*)?$/.exec(p);
-  if (up) return "https://image.tmdb.org/t/p/w342/" + up[1] + ".jpg";
-  return p.replace(/(image\.tmdb\.org\/t\/p\/)(?:w500|w780|w1280|original)\//, "$1w342/");
-}
+const posterUrl = (p) => { p = String(p || ""); return p.startsWith("//") ? "https:" + p : /^https?:\/\//i.test(p) ? p : undefined; };
 
 // Prueba varias direcciones y devuelve la primera lista con resultados.
 async function firstCards(urls, parse, referer) {
@@ -824,7 +815,7 @@ function pgCards(h) {
     if (seen.has(m[1])) continue;
     seen.add(m[1]);
     const isMovie = m[6] === "movie";
-    const it = mkItem("pg", isMovie ? "movie" : "series", enc(m[3]) + (isMovie ? "|" + m[1] : ""), jsonStr(m[2]), posterUrl(m[4]), m[5] === "null" ? "" : m[5]);
+    const it = mkItem("pg", isMovie ? "movie" : "series", enc(m[3]) + (isMovie ? "|" + m[1] : ""), jsonStr(m[2]), m[4] || undefined, m[5] === "null" ? "" : m[5]);
     if (it) out.push(it);
   }
   return out;
@@ -869,7 +860,7 @@ async function pgEpisodes(slug) {
   const eps = [];
   if (seasons) {
     for (const s of seasons) for (const e of (s.episodes || [])) {
-      eps.push({ season: Number(s.number) || 1, number: Number(e.number) || eps.length + 1, ref: "pg|e|" + enc(slug) + "|" + (Number(s.number) || 1) + "|" + (Number(e.number) || 1), title: stripTags(e.title) || tr("Episodio ", "Episode ") + e.number, poster: posterUrl(e.poster) });
+      eps.push({ season: Number(s.number) || 1, number: Number(e.number) || eps.length + 1, ref: "pg|e|" + enc(slug) + "|" + (Number(s.number) || 1) + "|" + (Number(e.number) || 1), title: stripTags(e.title) || tr("Episodio ", "Episode ") + e.number, poster: e.poster || undefined });
     }
   }
   if (!eps.length) {
@@ -946,24 +937,6 @@ async function pgCandidates(spec) {
   return cands;
 }
 
-// Las páginas de lista se guardan 5 minutos: Inicio, categorías y búsqueda dejan de repetir las mismas peticiones.
-function memoize(name, fn) {
-  const c = new Map();
-  return (...a) => {
-    const k = name + "|" + a.join("|");
-    const h = c.get(k);
-    if (h && Date.now() - h.t < 5 * 60 * 1000) return h.p;
-    const p = Promise.resolve(fn(...a));
-    c.set(k, { t: Date.now(), p });
-    p.catch(() => c.delete(k));
-    return p;
-  };
-}
-pgPage = memoize("pg", pgPage);
-ryPage = memoize("ry", ryPage);
-pePage = memoize("pe", pePage);
-opPage = memoize("op", opPage);
-
 // ====================================================================================================
 //  CATÁLOGO, BÚSQUEDA, CAPÍTULOS
 // ====================================================================================================
@@ -1006,29 +979,18 @@ function mergeDupes(items) {
 async function sectionPage(sec, n) {
   const def = SECTIONS[sec];
   if (!def) throw kino.error("not_found", "catálogo desconocido");
-  // Todas las fuentes arrancan a la vez; en cuanto una responde se espera solo 1,5 s más a las demás.
-  const slots = def.parts.map((p, i) => {
-    const o = { i, done: false, ok: false, items: [], hasNext: false };
-    o.p = withTimeout(p(n), 8000).then((v) => { o.ok = true; o.items = v.items; o.hasNext = !!v.hasNext; },
-      (e) => { o.err = e; log("sección " + sec + " p" + n + ": falló la fuente " + i + " " + String((e && e.message) || e).slice(0, 60)); }).then(() => { o.done = true; });
-    return o;
+  const res = await Promise.allSettled(def.parts.map((p) => withTimeout(p(n), 9000)));
+  const lists = [];
+  let hasNext = false;
+  let ok = 0;
+  res.forEach((r, i) => {
+    if (r.status === "fulfilled") { ok++; lists.push(r.value.items); if (r.value.hasNext) hasNext = true; }
+    else log("sección " + sec + " p" + n + ": falló la fuente " + i + " " + String((r.reason && r.reason.message) || r.reason).slice(0, 60));
   });
-  const t0 = Date.now();
-  let firstAt = 0;
-  while (Date.now() - t0 < 9000) {
-    if (slots.every((o) => o.done)) break;
-    if (!firstAt && slots.some((o) => o.ok && o.items.length)) firstAt = Date.now();
-    if (firstAt && Date.now() - firstAt > 1500) break;
-    await kino.sleep(100);
-  }
-  const good = slots.filter((o) => o.ok);
-  if (!good.length) throw (slots.find((o) => o.err) || {}).err || kino.error("unavailable", "ninguna fuente respondió");
-  const lists = good.map((o) => o.items);
-  const hasNext = slots.some((o) => !o.done || o.hasNext);
+  if (!ok) throw (res[0].reason || kino.error("unavailable", "ninguna fuente respondió"));
   const mixed = [];
   const max = Math.max(...lists.map((l) => l.length), 0);
   for (let i = 0; i < max; i++) for (const l of lists) if (l[i]) mixed.push(l[i]);
-  log("sección " + sec + " p" + n + ": " + mixed.length + " en " + (Date.now() - t0) + " ms (" + good.length + "/" + slots.length + " fuentes)");
   return { items: mergeDupes(mixed), hasNext };
 }
 
@@ -1272,7 +1234,6 @@ export async function resolve(ref) {
     else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
   });
   cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
-  log("resolve: servidores listos en " + (Date.now() - t0) + " ms");
   const useless = (c) => /dood|playmogo|doodstream|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
   if (usable.length) cands = usable;
@@ -1335,7 +1296,6 @@ export async function resolve(ref) {
   if (!winner && pending > 0 && left() > 1500) await waitFor(Math.max(1500, left() - 2500));
   if (winner) {
     if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1500);
-    log("resolve: listo en " + (Date.now() - t0) + " ms con " + hostOf(winner.v.url));
     return winner.v;
   }
   const ld = cands.find(isDirect);
