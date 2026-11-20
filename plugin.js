@@ -1,149 +1,221 @@
-// Reloj del reproductor: la hora arriba y la fecha debajo, en dos líneas de un mismo elemento. Fondo transparente.
-// En TV en vivo se puede mover el reloj a la izquierda (ajuste "liveLeft"); en series y películas no se mueve.
-// Kino deja como máximo 3 elementos por plugin: "ends" (con los controles), "clock" (con los controles) y "clock-fixed" (fijo).
+// PelisMart 0.1.0. Solo lee páginas públicas. No resuelve verificaciones, captchas ni cuentas.
+globalThis.__kinoDropPendingFetches = true;
+const BASE = "https://pelismart.mov";
+const UA = "Mozilla/5.0 (Linux; Android 13; SM-G970F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
+const LISTS = { pe: ["Películas", "/peliculas"], se: ["Series", "/series"], an: ["Animes", "/animes"], dr: ["Doramas", "/generos/dorama"] };
 
-const DAYS = { es: ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"], en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] };
-const MONTHS = {
-  es: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
-  en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
-};
-
-const pad = (n) => String(n).padStart(2, "0");
-
-function langOf(lang) {
-  return typeof lang === "string" && lang.toLowerCase().startsWith("en") ? "en" : "es";
+function log(...a) { try { kino.log(...a); } catch (e) { /* no romper */ } }
+function tr(es, en) { return kino.lang === "en-US" ? en : es; }
+function fail(code, detail, es, en) { return kino.error(code, detail, { userMessage: tr(es, en) }); }
+function dec(s) {
+  return String(s || "").replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&mdash;/g, "-").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+function hostOf(u) { const m = /^https?:\/\/([^\/?#]+)/i.exec(String(u || "")); return m ? m[1] : ""; }
+function abs(u) {
+  u = dec(u);
+  if (!u) return "";
+  if (u.startsWith("//")) return "https:" + u;
+  if (/^https:\/\//i.test(u)) return u;
+  if (u.charAt(0) === "/") return BASE + u;
+  return "";
 }
 
-function clockParts(now, lang, hour12) {
-  const l = langOf(lang);
-  const h = now.getHours();
-  const time = hour12
-    ? `${h % 12 || 12}:${pad(now.getMinutes())} ${h < 12 ? "AM" : "PM"}`
-    : `${pad(h)}:${pad(now.getMinutes())}`;
-  const day = DAYS[l][now.getDay()];
-  const month = MONTHS[l][now.getMonth()];
-  const d = now.getDate();
-  const date = l === "en" ? `${day} ${month} ${d}` : `${day} ${d} ${month}`;
-  return { time, date };
+async function get(url, referer, accept) {
+  const h = { "User-Agent": UA, "Accept-Language": "es", Accept: accept || "text/html,application/json,*/*" };
+  h.Referer = referer || BASE + "/";
+  const r = await kino.fetch(url, { headers: h });
+  return { status: r.status, ok: r.ok, text: await r.text(), res: r };
+}
+async function page(path) {
+  const r = await get(BASE + path);
+  if (!r.ok) throw fail(r.status === 403 ? "geo_blocked" : "unavailable", "status " + r.status, "El sitio respondió con el error " + r.status + ".", "The site answered with error " + r.status + ".");
+  return r.text;
 }
 
-const EM = { ":": 0.26, " ": 0.25, i: 0.24, j: 0.24, l: 0.24, t: 0.33, f: 0.33, r: 0.34, m: 0.85, w: 0.75 };
-const width = (s) => [...s].reduce((a, c) => a + (EM[c] !== undefined ? EM[c] : 0.55), 0);
-const NBSP = "\u00A0";
-
-function centered(time, date) {
-  const n = Math.max(0, Math.round((width(date) - width(time)) / 2 / EM[" "]));
-  return NBSP.repeat(n) + time;
-}
-
-const COLORS = { white: "#FFFFFF", yellow: "#FFD54F", cyan: "#4DD0E1", green: "#81C784", orange: "#FFB74D", pink: "#F48FB1", black: "#000000" };
-const TRANSPARENT = "#00000000";
-const SIZES = ["small", "normal", "large", "xlarge"];
-
-// Opacidad de la hora fija (ajuste "fixedOpacity", en %): el valor es el canal alfa que se le agrega al color (#RRGGBBAA).
-// Kino nunca dibuja una letra con menos de la mitad de opacidad (un alfa menor se sube a la mitad), por eso el ajuste llega solo hasta 50 %.
-const OPACITY_ALPHA = { 75: "BF", 50: "80" };
-
-// Si el reloj se mueve hacia el lado contrario, cambia -1 por 1.
-const LEFT_SIGN = -1;
-
-const setting = (key) => {
-  try {
-    return kino.config.get(key);
-  } catch (e) {
-    return undefined;
+// ---- Tarjetas ---------------------------------------------------------------------------------------
+function parseCards(html) {
+  const out = [], seen = new Set();
+  const parts = html.split('class="card"').slice(1);
+  for (const p of parts) {
+    const a = /<a href="\/(pelicula|serie|anime)\/([^"#?\/]+)"/i.exec(p);
+    if (!a || seen.has(a[2])) continue;
+    const alt = /<img[^>]*\balt="([^"]*)"/i.exec(p);
+    const t = /class="card__title"[^>]*><a[^>]*>([^<]+)</i.exec(p);
+    const src = /<img[^>]*\bsrc="([^"]+)"/i.exec(p);
+    const yr = /class="year">(\d{4})/i.exec(p);
+    const title = dec(t ? t[1] : alt ? alt[1] : "");
+    if (!title) continue;
+    seen.add(a[2]);
+    const isMovie = a[1].toLowerCase() === "pelicula";
+    out.push({
+      id: "pm-" + a[2], ref: (isMovie ? "m|" : a[1].toLowerCase() === "anime" ? "a|" : "s|") + a[2],
+      title: title.slice(0, 200), kind: isMovie ? "movie" : "series",
+      genres: [isMovie ? "peliculas" : "series"], poster: src ? abs(src[1]) || undefined : undefined,
+      year: yr ? Number(yr[1]) : undefined,
+    });
   }
-};
-
-/** El alfa de la opacidad elegida, o null con 100 % (por defecto), sin ajuste o con un valor que no es de la lista. */
-function opacityAlpha() {
-  return OPACITY_ALPHA[Number(setting("fixedOpacity"))] || null;
-}
-
-function endsText(context, hour12) {
-  if (!context || context.live === true) return null;
-  const pos = context.positionMs;
-  const dur = context.durationMs;
-  if (typeof pos !== "number" || typeof dur !== "number" || !Number.isFinite(pos) || !Number.isFinite(dur) || dur <= 0 || pos < 0) return null;
-  const speed = context.player && typeof context.player.speed === "number" && context.player.speed > 0 ? context.player.speed : 1;
-  const { time } = clockParts(new Date(Date.now() + Math.max(0, dur - pos) / speed), context.lang, hour12);
-  return langOf(context.lang) === "en" ? `Ends at ${time}` : `Termina a las ${time}`;
-}
-
-export async function playerSlot(context) {
-  const hour12 = setting("format") === "12";
-  const { time, date } = clockParts(new Date(), context && context.lang, hour12);
-  const live = !!(context && context.live === true);
-  const mode = setting(live ? "liveMode" : "vodMode");
-  const fixed = mode === "fixed" || mode === "hide" ? mode === "fixed" : live;
-
-  const size = setting("size");
-  const color = COLORS[setting("color")];
-  // Desplazamiento a la izquierda: solo en TV en vivo.
-  const leftN = live ? Number(setting("liveLeft")) : 0;
-  const left = Number.isFinite(leftN) && leftN > 0 ? LEFT_SIGN * leftN : 0;
-  const alpha = opacityAlpha();
-
-  const dress = (it) => {
-    it.background = TRANSPARENT;
-    if (SIZES.includes(size) && size !== "normal") it.size = size;
-    if (color) it.color = color;
-    if (left !== 0) it.left = left;
-    // Solo la hora fija ("clock-fixed"): la opacidad se la da el alfa del color (con "Blanco de Kino" se usa blanco).
-    if (alpha && it.id === "clock-fixed") it.color = (color || "#FFFFFF") + alpha;
-    return it;
-  };
-
-  const endsMode = setting("endsAt");
-  const ends = endsMode === "fixed" || endsMode === "hide" ? endsText(context, hour12) : null;
-  const endsFixed = endsMode === "fixed";
-
-  const items = [];
-  if (ends && endsFixed && fixed) {
-    items.push(dress({ id: "clock-fixed", text: `${centered(time, ends)}\n${ends}` }));
-  } else {
-    items.push(dress({ id: fixed ? "clock-fixed" : "clock", text: `${centered(time, date)}\n${date}` }));
-    if (ends) {
-      items.push(dress({ id: endsFixed ? "clock-fixed" : "ends", text: ends }));
-    }
+  const ep = html.split('class="card-episode"').slice(1);
+  for (const p of ep) {
+    const a = /<a href="(?:https:\/\/pelismart\.mov)?\/(serie|anime)\/([^"#?\/]+)/i.exec(p);
+    if (!a || seen.has(a[2])) continue;
+    const alt = /<img[^>]*\balt="([^"]*)"/i.exec(p);
+    const src = /<img[^>]*\bsrc="([^"]+)"/i.exec(p);
+    const title = dec(alt ? alt[1] : "");
+    if (!title) continue;
+    seen.add(a[2]);
+    out.push({ id: "pm-" + a[2], ref: (a[1].toLowerCase() === "anime" ? "a|" : "s|") + a[2], title: title.slice(0, 200), kind: "series", genres: ["series"], poster: src ? abs(src[1]) || undefined : undefined });
   }
-
-  return { items, refreshMs: 60000 };
+  return out;
 }
 
-export async function playerSlotAction() {
+export async function home() {
+  await null;
+  const html = await page("/");
+  const rows = [];
+  const secs = html.split(/<h2 class="section__title">/i).slice(1);
+  secs.forEach((s, i) => {
+    const name = dec((/^([\s\S]*?)<\/h2>/i.exec(s) || [, ""])[1].replace(/<[^>]*>/g, ""));
+    const items = parseCards(s);
+    log("inicio " + name + " -> " + items.length);
+    if (name && items.length && !/comentarios/i.test(name)) rows.push({ id: "row-" + i, title: name, ref: "x", items: items.slice(0, 24) });
+  });
+  for (const k of Object.keys(LISTS)) rows.push({ id: "cat-" + k, title: LISTS[k][0], ref: k, items: [] });
+  const withItems = rows.filter((r) => r.items.length);
+  if (!withItems.length) throw fail("unavailable", "sin catálogo", "No se pudo cargar el inicio. Usa el buscador.", "Could not load the home. Use search.");
+  return withItems;
+}
+
+export async function browse(ref, cursor) {
+  await null;
+  const L = LISTS[String(ref)];
+  if (!L) throw fail("not_found", "catálogo desconocido", "Ese catálogo no existe.", "That catalog does not exist.");
+  const n = Math.max(1, Number(cursor) || 1);
+  const html = await page(L[1] + (n > 1 ? "?page=" + n : ""));
+  const items = parseCards(html);
+  log("catálogo " + L[0] + " página " + n + " -> " + items.length);
+  return { items, nextCursor: items.length >= 12 ? String(n + 1) : undefined };
+}
+
+export async function search(query) {
+  await null;
+  const q = String((query && query.q) || "").trim().slice(0, 80);
+  if (!q) return [];
+  const html = await page("/search?s=" + encodeURIComponent(q));
+  const items = parseCards(html);
+  log("buscar '" + q + "' -> " + items.length);
+  return items;
+}
+
+// ---- Capítulos --------------------------------------------------------------------------------------
+export async function episodes(ref) {
+  await null;
+  const p = String(ref || "").split("|");
+  const kind = p[0], slug = p[1];
+  if (!slug) throw fail("not_found", "ref vacía", "No se encontró este título.", "Title not found.");
+  if (kind === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "m|" + slug, title: tr("Película", "Movie") }] };
+  const html = await page("/" + (kind === "a" ? "anime" : "serie") + "/" + slug);
+  const title = dec((/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html) || [, ""])[1].replace(/<[^>]*>/g, ""));
+  const eps = [], seen = new Set();
+  const re = /<li>\s*<aside class="epi_desc">([\s\S]*?)<\/aside>\s*<a href="#s\d+-e\d+"([^>]*)>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const s = /data-season="(\d+)"/.exec(m[2]), e = /data-episode="(\d+)"/.exec(m[2]);
+    if (!s || !e) continue;
+    const key = s[1] + "x" + e[1];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const label = dec((/<div>([\s\S]*?)<\/div>/i.exec(m[1]) || [, ""])[1].replace(/<[^>]*>/g, ""));
+    eps.push({ season: Number(s[1]), number: Number(e[1]), ref: "e|" + kind + "|" + slug + "|" + s[1] + "|" + e[1], title: label && label.length > 2 && label.length < 80 ? label : tr("Episodio ", "Episode ") + e[1] });
+  }
+  log("capítulos " + slug + " -> " + eps.length);
+  if (!eps.length) throw fail("not_found", "sin capítulos", "No se encontraron capítulos.", "No episodes found.");
+  eps.sort((a, b) => a.season - b.season || a.number - b.number);
+  return { series: { title }, episodes: eps };
+}
+
+// ---- Reproducción -----------------------------------------------------------------------------------
+function mediaIn(html, org) {
+  const t = String(html || "").replace(/\\\//g, "/").replace(/&amp;/g, "&");
+  const re = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?/gi;
+  let m;
+  while ((m = re.exec(t))) { if (!/(demo|sample|trailer|youtube)/i.test(m[0])) return m[0]; }
+  const f = /(?:file|src|source|hls|video_url)\s*[:=]\s*["'](\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i.exec(t);
+  return f && org ? org + f[1] : "";
+}
+function framesIn(html, base) {
+  const out = [];
+  const re = /<iframe[^>]*\bsrc=["']([^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(html))) { const u = m[1].startsWith("/") ? base + m[1] : m[1].startsWith("//") ? "https:" + m[1] : m[1]; if (/^https:\/\//i.test(u)) out.push(u); }
+  const re2 = /(?:location(?:\.href)?\s*=|window\.open\()\s*["']([^"']+)["']/gi;
+  while ((m = re2.exec(html))) if (/^https:\/\//i.test(m[1])) out.push(m[1]);
+  const mr = /http-equiv=["']refresh["'][^>]*url=([^"'>\s]+)/i.exec(html);
+  if (mr && /^https:\/\//i.test(mr[1])) out.push(mr[1]);
+  return out;
+}
+function result(u, referer) {
+  return { url: u, mime: /\.m3u8/i.test(u) ? "application/x-mpegurl" : "video/mp4", headers: { Referer: referer, "User-Agent": UA } };
+}
+async function capture(url, referer) {
+  if (typeof kino.browser !== "object" || !kino.browser || typeof kino.browser.capture !== "function") return null;
+  const pg = await kino.browser.capture(url, { timeoutMs: 12000, headers: { Referer: referer } });
+  const media = pg && Array.isArray(pg.media) ? pg.media : [];
+  const f = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !/(demo|sample|trailer)/i.test(x.url));
+  if (!f) return null;
+  const out = { url: f.url, mime: f.mime || f.mimeType || (/\.m3u8/i.test(f.url) ? "application/x-mpegurl" : "video/mp4") };
+  if (f.headers && typeof f.headers === "object") out.headers = f.headers;
+  return out;
+}
+
+// Sigue vidurl -> iframes/redirecciones, anotando en el registro lo que ve (para depurar).
+async function follow(url, referer, depth) {
+  if (depth > 3) return null;
+  let r;
+  try { r = await get(url, referer); } catch (e) { log("vidurl fallo de red " + hostOf(url)); return null; }
+  let finalUrl = url;
+  try { if (r.res && r.res.url) finalUrl = r.res.url; } catch (e) { /* sin url final */ }
+  const html = r.text || "";
+  log("paso" + depth + " " + hostOf(url) + url.replace(/^https?:\/\/[^\/]+/, "").slice(0, 40) + " status=" + r.status + " final=" + hostOf(finalUrl) + " largo=" + html.length);
+  if (!r.ok) { log("cuerpo: " + html.replace(/\s+/g, " ").slice(0, 200)); return null; }
+  const org = (/^(https?:\/\/[^\/?#]+)/i.exec(finalUrl) || [])[1] || "";
+  const m = mediaIn(html, org);
+  if (m) { log("video encontrado en " + hostOf(finalUrl)); return result(m, org + "/"); }
+  const next = framesIn(html, org);
+  log("enlaces: " + next.map((x) => hostOf(x)).join(",") + " | inicio: " + html.replace(/\s+/g, " ").slice(0, 160));
+  for (const n of next.slice(0, 3)) { const v = await follow(n, finalUrl, depth + 1); if (v) return v; }
   return null;
 }
 
-// ===== Pantalla del menú =====
-
-export async function screen({ state }) {
-  const now = state && typeof state.now === "number" ? state.now : Date.now();
-  const p = clockParts(new Date(now), kino.lang, setting("format") === "12");
-  return {
-    type: "SingleChildScrollView",
-    every: [{ ms: 1000, event: "tick" }],
-    children: [
-      {
-        type: "Column",
-        key: "clock",
-        gap: 4,
-        padding: { compact: 16, expanded: 24 },
-        minHeight: { compact: 340, expanded: 400 },
-        crossAxisAlignment: "center",
-        mainAxisAlignment: "center",
-        children: [
-          { type: "Text", key: "time", text: p.time, style: "h1", bold: true, textAlign: "center", fill: true },
-          { type: "Text", text: p.date, style: "caption", color: "muted", textAlign: "center", fill: true },
-        ],
-      },
-    ],
-  };
-}
-
-export async function screenEvent({ name }) {
-  if (name === "open" || name === "tick") {
-    return { state: { now: Date.now() } };
+export async function resolve(ref) {
+  await null;
+  const p = String(ref || "").split("|");
+  let vid = [];
+  if (p[0] === "m") {
+    const html = await page("/pelicula/" + p[1]);
+    const re = /<button[^>]*class="server-btn[^"]*"[^>]*data-url="([^"]+)"[^>]*>([^<]*)</gi;
+    let m;
+    while ((m = re.exec(html))) vid.push({ url: abs(m[1]), name: dec(m[2]) });
+  } else if (p[0] === "e") {
+    const r = await get(BASE + "/api/episodio/" + (p[1] === "a" ? "anime" : "serie") + "/" + encodeURIComponent(p[2]) + "/" + p[3] + "/" + p[4], BASE + "/", "application/json");
+    if (!r.ok) throw fail("unavailable", "status " + r.status, "El sitio respondió con el error " + r.status + ".", "The site answered with error " + r.status + ".");
+    let html = "";
+    try { html = String(JSON.parse(r.text).html || ""); } catch (e) { /* respuesta inesperada */ }
+    const re = /<(?:iframe|button)[^>]*(?:src|data-url)="([^"]+)"/gi;
+    let m;
+    while ((m = re.exec(html))) vid.push({ url: abs(m[1]), name: "" });
+  } else throw fail("not_found", "referencia desconocida", "No se encontró este título.", "Title not found.");
+  vid = vid.filter((v) => v.url);
+  log("servidores: " + vid.map((v) => v.name + "@" + v.url.replace(BASE, "")).join(" ; "));
+  if (!vid.length) throw fail("not_found", "sin servidores", "Este título no tiene servidores de video.", "No video servers for this title.");
+  for (const v of vid) {
+    const hit = await follow(v.url, BASE + "/", 0);
+    if (hit) return hit;
+    try {
+      const c = await capture(v.url, BASE + "/");
+      if (c) { log("video por navegador"); return c; }
+    } catch (e) { log("navegador falló"); }
   }
-  return null;
+  throw fail("unavailable", "sin video", "No se pudo sacar el video de este servidor.", "Could not get the video from this server.");
 }
