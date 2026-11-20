@@ -911,25 +911,12 @@ async function pgCandidates(spec) {
   const id = p[2];
   const page = PG + "/movies/" + slug;
   let cands = [];
-  // La página llama a esta dirección sola al abrirse (sin parámetros). Se prueba con cabeceras de navegador y,
-  // si el sitio la rechaza, avisando antes a /api/session/sync como hace la página.
-  const apiUrl = PG + "/api/movies/" + id + "/stream";
-  const hdrs = { Accept: "application/json, text/plain, */*", Referer: page, Origin: PG, "X-Requested-With": "XMLHttpRequest", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty", "User-Agent": UA };
-  const attempt = async (tag) => {
-    try {
-      const r = await kino.fetch(apiUrl, { headers: hdrs });
-      const txt = r.ok ? await r.text() : "";
-      log("pg: api stream " + tag + " status=" + r.status + " bytes=" + txt.length + (txt ? " inicio=" + redact(txt.slice(0, 90)) : ""));
-      if (txt) { try { walkLinks(JSON.parse(txt), cands, undefined); } catch (e) { cands = pgLinks(txt, null); } }
-    } catch (e) { log("pg: api stream " + tag + " falló " + String((e && e.message) || e).slice(0, 50)); }
-  };
-  await attempt("1");
-  if (!cands.length) {
-    for (const m of ["POST", "GET"]) {
-      try { const r = await kino.fetch(PG + "/api/session/sync", { method: m, headers: hdrs }); log("pg: session/sync " + m + " status=" + r.status); if (r.ok) break; } catch (e) { /* sigue */ }
-    }
-    await attempt("2");
-  }
+  try {
+    const r = await kino.fetch(PG + "/api/movies/" + id + "/stream", { headers: { Accept: "application/json, text/plain, */*", Referer: page, Origin: PG } });
+    const txt = r.ok ? await r.text() : "";
+    log("pg: api stream status=" + r.status + " bytes=" + txt.length);
+    if (txt) { try { walkLinks(JSON.parse(txt), cands, undefined); } catch (e) { cands = pgLinks(txt, null); } }
+  } catch (e) { log("pg: api stream falló " + String((e && e.message) || e).slice(0, 50)); }
   if (!cands.length) {
     try { cands = pgLinks(rscText(await getText(page, { Referer: PG + "/" })), null); } catch (e) { /* sin página */ }
   }
@@ -940,11 +927,42 @@ async function pgCandidates(spec) {
 // ====================================================================================================
 //  CATÁLOGO, BÚSQUEDA, CAPÍTULOS
 // ====================================================================================================
+
+// Páginas por ruta (géneros, tendencias, colecciones). Cada fuente que falla simplemente no aporta títulos.
+async function ryPath(path, n) {
+  const items = await firstCards([RY + path + (n > 1 ? "page/" + n + "/" : "")], ryCards, RY + "/");
+  return { items, hasNext: items.length >= 12 };
+}
+async function pePath(path, n) {
+  const items = await firstCards([PE + path + (n > 1 ? "page/" + n + "/" : "")], peCards, PE + "/");
+  return { items, hasNext: items.length >= 8 };
+}
+async function peTrend(n) {
+  const urls = n === 1 ? [PE + "/catalogo/?orden=tendencias"] : [PE + "/catalogo/page/" + n + "/?orden=tendencias", PE + "/catalogo/?orden=tendencias&paged=" + n];
+  const items = (await firstCards(urls, peCards, PE + "/")).filter((x) => x.kind === "movie");
+  return { items, hasNext: items.length >= 8 };
+}
+async function pgGenre(slug, n) {
+  const items = pgCards(await getText(PG + "/genre/" + slug + (n > 1 ? "?page=" + n : ""), { Referer: PG + "/" }));
+  return { items, hasNext: items.length >= 20 };
+}
+function genreParts(slug) {
+  return [(n) => opPage(n, "/genero/" + slug + "/"), (n) => ryPath("/category/" + slug + "/", n), (n) => pePath("/category/" + slug + "/", n), (n) => pgGenre(slug, n)];
+}
 const SECTIONS = {
   peliculas: { genre: "peliculas", parts: [(n) => pgPage("movie", n), (n) => ryPage("movie", n), (n) => opPage(n), (n) => pePage("movie", n)] },
   series: { genre: "series", parts: [(n) => pgPage("serie", n), (n) => ryPage("serie", n), (n) => pePage("series", n)] },
   anime: { genre: "series", parts: [(n) => pePage("anime", n)] },
   estrenos: { genre: "peliculas", parts: [(n) => opPage(n, "/estreno/2026/"), (n) => pgPage("movie", n)] },
+  tendencias: { genre: "peliculas", parts: [(n) => peTrend(n), (n) => pgPage("movie", n)] },
+  terror: { genre: "peliculas", parts: genreParts("terror") },
+  comedia: { genre: "peliculas", parts: genreParts("comedia") },
+  accion: { genre: "peliculas", parts: genreParts("accion") },
+  drama: { genre: "peliculas", parts: genreParts("drama") },
+  aventura: { genre: "peliculas", parts: genreParts("aventura") },
+  animacion: { genre: "peliculas", parts: genreParts("animacion") },
+  disney: { genre: "peliculas", parts: [(n) => ryPath("/category/disney/", n), (n) => pePath("/category/disney/", n), (n) => ryPath("/category/pixar/", n)] },
+  superheroes: { genre: "peliculas", parts: [(n) => ryPath("/category/superheroes/", n), (n) => pePath("/category/superheroes/", n)] },
 };
 const SRC_PRIO = { pg: 0, ry: 1, pe: 2, op: 3 };
 
@@ -1001,6 +1019,10 @@ export async function home() {
     { id: "row-peliculas", ref: "peliculas", title: tr("Películas", "Movies") },
     { id: "row-series", ref: "series", title: tr("Series", "Series") },
     { id: "row-anime", ref: "anime", title: tr("Anime", "Anime") },
+    { id: "row-tendencias", ref: "tendencias", title: tr("Tendencias", "Trending") },
+    { id: "row-terror", ref: "terror", title: tr("Terror", "Horror") },
+    { id: "row-comedia", ref: "comedia", title: tr("Comedia", "Comedy") },
+    { id: "row-disney", ref: "disney", title: tr("Disney y Pixar", "Disney & Pixar") },
   ];
   const res = await Promise.allSettled(defs.map((d) => sectionPage(d.ref, 1)));
   const rows = [];
@@ -1044,6 +1066,15 @@ export async function categories() {
     { id: "series", title: tr("Series", "Series") },
     { id: "anime", title: tr("Anime", "Anime") },
     { id: "estrenos", title: tr("Estrenos", "New releases") },
+    { id: "tendencias", title: tr("Tendencias", "Trending") },
+    { id: "terror", title: tr("Terror", "Horror") },
+    { id: "comedia", title: tr("Comedia", "Comedy") },
+    { id: "accion", title: tr("Acción", "Action") },
+    { id: "drama", title: tr("Drama", "Drama") },
+    { id: "aventura", title: tr("Aventura", "Adventure") },
+    { id: "animacion", title: tr("Animación", "Animation") },
+    { id: "disney", title: tr("Disney y Pixar", "Disney & Pixar") },
+    { id: "superheroes", title: tr("Superhéroes", "Superheroes") },
   ];
   const first = await Promise.allSettled(defs.map((d) => sectionPage(d.id, 1)));
   return defs.map((d, i) => {
