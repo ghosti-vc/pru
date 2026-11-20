@@ -208,8 +208,8 @@
       "labelEn": "Fixed clock opacity",
       "type": "select",
       "default": "100",
-      "hint": "Solo cuando el reloj está en «Siempre visible». Kino no deja bajar de 50 %.",
-      "hintEn": "Only when the clock is set to \"Always visible\". Kino does not allow going below 50%.",
+      "hint": "Solo cuando el reloj está en «Siempre visible»",
+      "hintEn": "Only when the clock is set to \"Always visible\"",
       "options": [
         {
           "value": "100",
