@@ -4,6 +4,8 @@
 
 const REF = "https://doramasflix.io/";
 const HOME_ROW = 20;
+// Orden de idiomas: Latino, Castellano, Coreano y después el resto. Pon SOLO_LATINO = true para mostrar únicamente Latino.
+const SOLO_LATINO = false;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 // Cabeceras con las que el reproductor pide el video: muchos servidores responden 403 si falta el origen o el navegador.
@@ -290,7 +292,10 @@ async function captureEmbed(embedUrl, ms, referer) {
   const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !isDemo(x.url));
   if (!first) return null;
   const out = { url: first.url, mime: first.mime || first.mimeType || (/\.m3u8(\?|$)/i.test(first.url) ? "application/x-mpegurl" : "video/mp4") };
-  if (first.headers && typeof first.headers === "object") out.headers = first.headers;
+  // Si el navegador no entrega cabeceras, el reproductor pedía el video sin Referer/Origin y el servidor respondía 403.
+  const hd = playHeaders(embedUrl);
+  if (first.headers && typeof first.headers === "object") Object.assign(hd, first.headers);
+  out.headers = hd;
   return out;
 }
 
@@ -543,12 +548,13 @@ const PE = "https://pelis182.net";
 const OP = "https://onlypelis.com";
 
 const A = (base, u) => { u = decodeEntities(u); return u.startsWith("//") ? "https:" + u : u.charAt(0) === "/" ? base + u : u; };
-const LANG_NAME = ["Latino", "Castellano", "Subtitulado"];
+const LANG_NAME = ["Latino", "Castellano", "Coreano", "Subtitulado"];
 function langRank(s) {
   s = String(s || "").toLowerCase();
   if (/latino|lat\b/.test(s)) return 0;
   if (/castellano|espa[nñ]ol|cast\b|espa/.test(s)) return 1;
-  return 2;
+  if (/coreano|korean|\bkor\b|\bkr\b/.test(s)) return 2;
+  return 3;
 }
 const jsonStr = (s) => { try { return JSON.parse('"' + s + '"'); } catch (e) { return String(s || ""); } };
 const posterUrl = (p) => { p = String(p || ""); return p.startsWith("//") ? "https:" + p : /^https?:\/\//i.test(p) ? p : undefined; };
@@ -780,7 +786,7 @@ async function opCandidates(spec) {
     }
     if (embed) {
       const lang = langRank(o.title);
-      cands.push({ url: embed, lang: /ver/i.test(o.title) && lang === 2 ? 0 : lang, label: "OnlyPelis" + (o.title ? " · " + o.title : ""), referer: page });
+      cands.push({ url: embed, lang: /ver/i.test(o.title) && lang === 3 ? 0 : lang, label: "OnlyPelis" + (o.title ? " · " + o.title : ""), referer: page });
     }
   }
   return cands;
@@ -899,7 +905,7 @@ function pgLinks(t, ownId) {
     const ep = /"episodeId":(?:null|"(\w+)")/.exec(o);
     if (ownId && ep && ep[1] && ep[1] !== ownId) continue;
     const lg = /"languageId":"(\w+)"/.exec(o);
-    const lang = lg && PG_LANG[lg[1]] !== undefined ? PG_LANG[lg[1]] : 2;
+    const lang = lg && PG_LANG[lg[1]] !== undefined ? PG_LANG[lg[1]] : 3;
     out.push({ url: jsonStr(m[1]), lang, label: "PelisGO · " + LANG_NAME[lang], referer: PG + "/" });
   }
   return out;
@@ -1005,7 +1011,7 @@ async function pgGenre(slug, n) {
 function genreParts(slug) {
   return [(n) => opPage(n, "/genero/" + slug + "/"), (n) => ryPath("/category/" + slug + "/", n), (n) => pePath("/category/" + slug + "/", n), (n) => pgGenre(slug, n)];
 }
-const dfParts = (kind, extra) => [(n) => dfPage("fi", kind, n, extra), (n) => dfPage("fn", kind, n, extra)].concat(extra ? [] : kind === "s" ? [(n) => fbPage("s", n), (n) => fpPage("drama", n)] : kind === "m" ? [(n) => fbPage("m", n), (n) => fpPage("pelicula", n)] : []);
+const dfParts = (kind, extra) => [(n) => dfPage("fi", kind, n, extra), (n) => dfPage("fn", kind, n, extra)].concat(extra ? [] : kind === "s" ? [(n) => fbPage("s", n)] : kind === "m" ? [(n) => fbPage("m", n)] : []);
 const SECTIONS = {
   doramas: { genre: "series", parts: dfParts("s") },
   peliculas: { genre: "peliculas", parts: dfParts("m") },
@@ -1014,7 +1020,7 @@ const SECTIONS = {
   drama: { genre: "series", parts: dfParts("s", "/generos/drama") },
   romance: { genre: "series", parts: dfParts("s", "/generos/romance") },
 };
-const SRC_PRIO = { fi: 0, fn: 1, fb: 2, fp: 3 };
+const SRC_PRIO = { fi: 0, fn: 1, fb: 2 };
 
 function normTitle(t) {
   return String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, "");
@@ -1361,10 +1367,9 @@ async function dfCandidates(src, spec) {
 }
 
 // ====================================================================================================
-//  DORAMASFLIX.BEER (WordPress) y PANDRAMA.AT: otras dos fuentes.
+//  DORAMASFLIX.BEER (WordPress): otra fuente.
 // ====================================================================================================
 const FB = "https://doramasflix.beer";
-const FP = "https://pandrama.at";
 async function webGet(base, path) {
   const r = await kino.fetch(base + path, { headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "Accept-Language": "es-ES,es;q=0.9", Referer: base + "/" }, timeoutMs: 9000 });
   if (r.status === 404) throw kino.error("not_found", "404");
@@ -1403,7 +1408,7 @@ async function fbSearch(q) {
   log("fb: búsqueda -> " + items.length);
   return items;
 }
-const DF_SKIP = /(^|\.)(doramasflix|pandrama|youtube|youtu|google|googletagmanager|gstatic|facebook|twitter|instagram|gravatar|w|wp|schema|tmdb|themoviedb|cloudflare|cloudflareinsights|jquery|jsdelivr|cdnjs|unpkg|fonts|image\.tmdb)\./i;
+const DF_SKIP = /(^|\.)(doramasflix|youtube|youtu|google|googletagmanager|gstatic|facebook|twitter|instagram|gravatar|w|wp|schema|tmdb|themoviedb|cloudflare|cloudflareinsights|jquery|jsdelivr|cdnjs|unpkg|fonts|image\.tmdb)\./i;
 // Servidores en una página: iframes, atributos data-* y listas desplegables con direcciones https.
 function genericEmbeds(html, ownHost) {
   const urls = [];
@@ -1445,80 +1450,10 @@ async function fbCandidates(spec) {
     log("fb: sin servidores visibles; bytes=" + html.length + " player=" + /player|playeroptions|dooplay/i.test(html) + " ajax=" + /admin-ajax|wp-json/i.test(html));
     throw kino.error("not_found", "fb sin servidores", { userMessage: tr("No se encontraron servidores en este capítulo.", "No servers found for this episode.") });
   }
-  return urls.slice(0, 10).map((u) => ({ url: u, lang: 2, label: "DoramasFlix.beer · " + hostOf(u), referer: FB + "/" }));
+  return urls.slice(0, 10).map((u) => ({ url: u, lang: 3, label: "DoramasFlix.beer · " + hostOf(u), referer: FB + "/" }));
 }
-// ---- pandrama.at: tarjetas pd4-card, fichas /detalle/<serie>/, capítulos /capitulo/<serie>[-temporada-N]-capitulo-N/
-function fpCards(html, forceKind) {
-  const out = [];
-  const seen = new Set();
-  const re = /<a\b[^>]*href="https:\/\/pandrama\.at\/detalle\/([^"\/]+)\/"[^>]*aria-label="([^"]*)"[^>]*>([\s\S]{0,1600}?)<\/a>/gi;
-  let m;
-  while ((m = re.exec(html))) {
-    if (seen.has(m[1])) continue;
-    const title = decodeEntities(m[2]).trim();
-    if (!title) continue;
-    const imgs = [...m[3].matchAll(/<img\b[^>]*\bsrc="(https:[^"]*)"/gi)].map((x) => x[1]).filter((u) => !/placeholder|panda/i.test(u));
-    seen.add(m[1]);
-    out.push(mkItem("fp", forceKind || "series", m[1], title, imgs[0] && posterUrl(decodeEntities(imgs[0])), null));
-  }
-  return out.filter(Boolean);
-}
-const fpFirst = {};
-async function fpPage(tipo, n) {
-  const path = "/catalogo/?tipo=" + tipo + (n > 1 ? "&paged=" + n : "");
-  const html = await webGet(FP, path);
-  const items = fpCards(html, tipo === "pelicula" ? "movie" : "series");
-  if (!items.length) throw kino.error("unavailable", "fp sin tarjetas");
-  const sig = items.map((x) => x.id).join(",");
-  if (n === 1) fpFirst[tipo] = sig;
-  else if (fpFirst[tipo] === sig) return { items: [], hasNext: false };
-  log("fp: " + tipo + " p" + n + " -> " + items.length);
-  return { items, hasNext: items.length >= 12 && n < 10 };
-}
-async function fpSearch(q) {
-  const items = fpCards(await webGet(FP, "/?s=" + enc(q)));
-  log("fp: búsqueda -> " + items.length);
-  return items;
-}
-async function fpEpisodes(slug, kind) {
-  if (kind === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "fp|m|" + slug, title: tr("Película", "Movie") }] };
-  const html = await webGet(FP, "/detalle/" + slug + "/");
-  const eps = new Map();
-  for (const m of html.matchAll(/href="https:\/\/pandrama\.at\/capitulo\/([a-z0-9._-]+?)(?:-temporada-(\d+))?-capitulo-(\d+)\/?"/gi)) {
-    if (m[1] !== slug && m[1].indexOf(slug) !== 0 && slug.indexOf(m[1]) !== 0) continue;
-    const season = m[2] ? +m[2] : 1;
-    const k = season + "x" + (+m[3]);
-    if (!eps.has(k)) eps.set(k, { season, number: +m[3], ref: "fp|e|" + m[1] + (m[2] ? "-temporada-" + m[2] : "") + "-capitulo-" + m[3], title: tr("Capítulo ", "Episode ") + (+m[3]) });
-  }
-  const out = [...eps.values()].sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  const t = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
-  log("fp: episodios " + slug + " = " + out.length);
-  if (!out.length) {
-    // Sin capítulos: se trata como película (los servidores salen en su propia ficha).
-    if (/data-pd6-player=/.test(html)) return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: "fp|m|" + slug, title: tr("Película", "Movie") }] };
-    throw kino.error("not_found", "fp sin capítulos");
-  }
-  return { series: { title: t ? stripTags(t[1]).slice(0, 200) : "" }, episodes: out };
-}
-async function fpCandidates(spec) {
-  const p = spec.split("|");
-  const path = (p[0] === "e" ? "/capitulo/" : "/detalle/") + p[1] + "/";
-  const html = await webGet(FP, path);
-  const cands = [];
-  for (const m of html.matchAll(/data-pd6-player="([^"]+)"[^>]*>\s*(?:<span>[^<]*<\/span>)?\s*<b>([^<]*)<\/b>\s*<small>([^<]*)<\/small>/gi)) {
-    const u = decodeEntities(m[1]);
-    if (!/^https:\/\//i.test(u) || cands.some((c) => c.url === u)) continue;
-    const info = decodeEntities(m[3]);
-    const lang = /lat/i.test(info) ? 0 : /cast|espa[nñ]a/i.test(info) && !/sub/i.test(info) ? 1 : 2;
-    cands.push({ url: u, lang, label: "Pandrama · " + decodeEntities(m[2]).trim() + " · " + info.split("·")[0].trim(), referer: FP + "/" });
-  }
-  log("fp: " + path.slice(0, 50) + " servidores=" + cands.length + " " + cands.map((c) => hostOf(c.url)).join(","));
-  if (!cands.length) throw kino.error("not_found", "fp sin servidores", { userMessage: tr("Este capítulo aún no tiene servidores.", "No servers for this episode yet.") });
-  return cands;
-}
-
 async function searchAll(qa, ms) {
-  const jobs = [["fi", (q) => dfSearch("fi", q)], ["fn", (q) => dfSearch("fn", q)], ["fb", fbSearch], ["fp", fpSearch]].filter(([n]) => !(deadUntil[n] > Date.now()));
+  const jobs = [["fi", (q) => dfSearch("fi", q)], ["fn", (q) => dfSearch("fn", q)], ["fb", fbSearch]].filter(([n]) => !(deadUntil[n] > Date.now()));
   const res = await Promise.allSettled(jobs.map(([, f]) => withTimeout(f(qa), Math.min(ms || 9000, 7000))));
   const all = [];
   res.forEach((r, i) => {
@@ -1545,7 +1480,6 @@ async function episodesOne(raw) {
   if (kind === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: raw, title: tr("Película", "Movie") }] };
   if (src === "fi" || src === "fn") return dfEpisodes(src, p[2], kind);
   if (src === "fb") return fbEpisodes(p[2], kind);
-  if (src === "fp") return fpEpisodes(p[2], kind);
   throw kino.error("not_found", "referencia desconocida");
 }
 
@@ -1651,7 +1585,6 @@ const rank = (u) => { const h = hostOf(u); const i = HOST_RANK.findIndex((r) => 
 async function candidatesOf(src, spec) {
   if (src === "fi" || src === "fn") return dfCandidates(src, spec);
   if (src === "fb") return fbCandidates(spec);
-  if (src === "fp") return fpCandidates(spec);
   throw kino.error("not_found", "referencia desconocida");
 }
 
@@ -1730,6 +1663,12 @@ export async function resolve(ref) {
       .catch(() => []);
   }
   cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
+  if (SOLO_LATINO) {
+    const lat = cands.filter((c) => (c.lang || 0) === 0);
+    log("resolve: filtro Latino " + lat.length + " de " + cands.length);
+    if (!lat.length) throw kino.error("not_found", "sin audio latino", { userMessage: tr("Este capítulo no tiene audio Latino.", "No Latino audio for this episode.") });
+    cands = lat;
+  }
   const useless = (c) => /dood|pinup|agl00\d\.com|playmogo|doodstream|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
   const usable = cands.filter((c) => !useless(c));
   if (usable.length) cands = usable;
@@ -1795,7 +1734,7 @@ export async function resolve(ref) {
     let extra;
     try { extra = await withTimeout(backupP, ms); } catch (e) { return; }
     backupDone = true;
-    const fresh = (extra || []).filter((c) => !useless(c) && !cands.some((x) => x.url === c.url));
+    const fresh = (extra || []).filter((c) => !useless(c) && !cands.some((x) => x.url === c.url) && (!SOLO_LATINO || (c.lang || 0) === 0));
     fresh.sort((x, y) => ((x.lang || 0) * 10 + rank(x.url)) - ((y.lang || 0) * 10 + rank(y.url)));
     log("resolve: respaldo aporta " + fresh.length + " servidores");
     for (const c of fresh) {
