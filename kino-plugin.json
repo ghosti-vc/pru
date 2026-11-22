@@ -1,27 +1,27 @@
 {
-  "id": "pelis-max",
-  "name": "Pelis Max",
-  "description": "Películas, series y anime en español desde PelisGO, Reypelis, Pelis182 y OnlyPelis en un solo lugar.",
-  "author": "Ghosti-vc",
-  "version": "0.1.4",
-  "apiVersion": 9,
-  "entry": "plugin.js",
-  "capabilities": [
-    "home",
-    "browse",
-    "search",
-    "episodes",
-    "resolve"
+  "name": "Mi HLS",
+  "description": "Reproductor de HLS donde puedes pegar cualquier URL .m3u8 (audio, video y subtítulos por separado) o recibirlas de otros plugins.",
+  "version": "0.2.0",
+  "apiVersion": 20,
+  "provides": [
+    {
+      "capability": "player",
+      "action": "playHls",
+      "description": "Reproduce un stream HLS (multi-audio / multi-subtítulo) dado su manifest .m3u8"
+    }
   ],
-  "hosts": [
-    "pelisgo.online",
-    "reypelis.net",
-    "pelis182.net",
-    "onlypelis.com",
-    "image.tmdb.org",
-    "paulinito.com"
+  "consumes": [
+    {
+      "capability": "player",
+      "action": "playHls"
+    }
   ],
-  "browser": true,
-  "fetchHosts": "any",
-  "streamHosts": "any"
+  "settings": {
+    "hlsUrl": {
+      "type": "string",
+      "title": "URL del stream HLS (.m3u8)",
+      "default": "",
+      "description": "Pega aquí la URL del manifest HLS si no viene de otro plugin"
+    }
+  }
 }
