@@ -1,9 +1,9 @@
 {
   "id": "doramasflix",
   "name": "DoramasFlix",
-  "description": "Doramas, películas y variedades de DoramasFlix (.io, .in y .beer) y Pandrama en un solo lugar, con el Latino primero.",
+  "description": "Doramas, películas y variedades de DoramasFlix (.io, .in y .beer) en un solo lugar, con el Latino primero, luego Castellano y Coreano.",
   "author": "Ghosti-vc",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "apiVersion": 9,
   "entry": "plugin.js",
   "capabilities": [
@@ -20,12 +20,11 @@
     "www.doramasflix.in",
     "doramasflix.beer",
     "www.doramasflix.beer",
-    "pandrama.at",
-    "www.pandrama.at",
     "embedshortener.co",
     "image.tmdb.org"
   ],
   "browser": true,
   "fetchHosts": "any",
-  "streamHosts": "any"
+  "streamHosts": "any",
+  "resolveAhead": true
 }
