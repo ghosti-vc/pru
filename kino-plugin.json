@@ -1,30 +1,15 @@
 {
-  "id": "doramasflix",
-  "name": "DoramasFlix",
-  "description": "Doramas, películas y variedades de DoramasFlix (.io, .in y .beer) en un solo lugar, con el Latino primero, luego Castellano y Coreano.",
+  "id": "tudorama",
+  "name": "TuDorama",
+  "description": "Doramas coreanos, chinos y japoneses, películas y variedades de TuDorama, con el Latino primero, luego Castellano y Coreano.",
   "author": "Ghosti-vc",
-  "version": "0.1.4",
+  "version": "0.1.0",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "capabilities": [
-    "home",
-    "browse",
-    "search",
-    "episodes",
-    "resolve"
-  ],
-  "hosts": [
-    "doramasflix.io",
-    "www.doramasflix.io",
-    "doramasflix.in",
-    "www.doramasflix.in",
-    "doramasflix.beer",
-    "www.doramasflix.beer",
-    "embedshortener.co",
-    "image.tmdb.org"
-  ],
+  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
+  "hosts": ["tudorama.com", "www.tudorama.com", "cdn.tudorama.com", "media.themoviedb.org", "image.tmdb.org"],
   "browser": true,
+  "resolveAhead": true,
   "fetchHosts": "any",
-  "streamHosts": "any",
-  "resolveAhead": true
+  "streamHosts": "any"
 }
