@@ -1,7 +1,8 @@
 // SoloLatino para Kino — películas, series, anime y doramas en español latino.
-// El sitio está detrás de Cloudflare: las páginas se leen con el navegador oculto.
+// Un solo archivo, sin import.
 
-const BASE = "https://sololatino.net";
+const BASE = "https://sololatino.co";
+const ALT = "https://sololatino.net";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -12,65 +13,158 @@ function es() {
 function t(esText, enText) {
   return es() ? esText : enText;
 }
+function langHeader() {
+  return es() ? "es-419,es;q=0.9,en;q=0.8" : "en-US,en;q=0.9,es;q=0.8";
+}
+
+// ---------- jar de cookies propio ----------
+const jar = new Map();
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return "";
+  }
+}
+
+function jarHeader(url) {
+  const host = hostOf(url);
+  if (!host) return "";
+  const parts = [];
+  for (const [h, m] of jar) {
+    if (host === h || host.endsWith("." + h)) {
+      for (const [k, v] of m) parts.push(k + "=" + v);
+    }
+  }
+  return parts.join("; ");
+}
+
+function absorb(url, res) {
+  const host = hostOf(url);
+  if (!host) return;
+  const h = res && res.headers;
+  if (!h) return;
+  const raw = h["set-cookie"] || h["Set-Cookie"];
+  if (!raw) return;
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const line of list) {
+    const first = String(line).split(";")[0];
+    const i = first.indexOf("=");
+    if (i < 1) continue;
+    const name = first.slice(0, i).trim();
+    const value = first.slice(i + 1).trim();
+    if (!jar.has(host)) jar.set(host, new Map());
+    jar.get(host).set(name, value);
+  }
+}
+
+function cookieValue(url, name) {
+  const host = hostOf(url);
+  if (!host) return "";
+  for (const [h, m] of jar) {
+    if (host === h || host.endsWith("." + h)) {
+      if (m.has(name)) return m.get(name);
+    }
+  }
+  return "";
+}
 
 // ---------- red ----------
-const FULL_HEADERS = {
-  "user-agent": UA,
-  accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "accept-language": "es-419,es;q=0.9,en;q=0.8",
-  "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"Windows"',
-  "sec-fetch-dest": "document",
-  "sec-fetch-mode": "navigate",
-  "sec-fetch-site": "same-origin",
-  "sec-fetch-user": "?1",
-  "upgrade-insecure-requests": "1",
-};
+async function bodyOf(res) {
+  try {
+    if (typeof res.text === "function") return await res.text();
+  } catch (e) {}
+  if (typeof res.body === "string") return res.body;
+  return "";
+}
 
-async function rawFetch(url, opts) {
+function statusOf(res) {
+  if (!res) return 0;
+  return res.status || res.statusCode || 0;
+}
+
+async function req(url, opts) {
   const o = opts || {};
-  const base = o.minimal
-    ? { "user-agent": UA, accept: "*/*", "accept-language": "es-419,es;q=0.9" }
-    : Object.assign({}, FULL_HEADERS);
-  if (o.headers) for (const k in o.headers) base[k] = o.headers[k];
-  const init = { headers: base, method: o.method || "GET" };
+  const headers = {
+    "user-agent": UA,
+    accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "accept-language": langHeader(),
+    "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-user": "?1",
+    "upgrade-insecure-requests": "1",
+  };
+  if (o.headers) for (const k in o.headers) headers[k] = o.headers[k];
+  const ck = jarHeader(url);
+  if (ck) headers.cookie = ck;
+  const init = { headers, method: o.method || "GET" };
   if (o.body != null) init.body = o.body;
   const res = await kino.fetch(url, init);
-  const text = await res.text();
-  return { status: res.status, text, url: res.url || url };
+  absorb(url, res);
+  const text = await bodyOf(res);
+  return { status: statusOf(res), text, url };
 }
 
-// El navegador oculto primero; kino.fetch solo como respaldo.
-async function pageHtml(url, timeoutMs) {
-  if (kino.browser && typeof kino.browser.page === "function") {
-    try {
-      const p = await kino.browser.page(url, { timeoutMs: timeoutMs || 12000 });
-      if (p && p.html && String(p.html).length > 500) return p.html;
-    } catch (e) {}
-  }
-  const r = await rawFetch(url);
-  if (r.status === 404) {
-    throw kino.error("not_found", "http 404", {
-      userMessage: t("Ese título ya no está en el sitio.", "That title is gone from the site."),
-    });
-  }
-  if (r.status >= 400) {
-    throw kino.error("unavailable", "http " + r.status, {
-      userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
-    });
-  }
-  return r.text;
+function abs(u) {
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.startsWith("//")) return "https:" + u;
+  return BASE + (u.startsWith("/") ? u : "/" + u);
 }
 
-function cookieGet(url, name) {
-  try {
-    if (kino.cookies && typeof kino.cookies.get === "function") {
-      return kino.cookies.get(url, name) || "";
+function altOf(u) {
+  if (/sololatino\.co/i.test(u)) return u.replace(/sololatino\.co/i, "sololatino.net");
+  if (/sololatino\.net/i.test(u)) return u.replace(/sololatino\.net/i, "sololatino.co");
+  return u;
+}
+
+// ---------- lectura de páginas ----------
+function hasBrowser() {
+  return typeof kino.browser !== "undefined" && kino.browser && typeof kino.browser.page === "function";
+}
+
+async function readPage(pathOrUrl, opts) {
+  const o = opts || {};
+  const first = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : abs(pathOrUrl);
+  const urls = [first];
+  const alt = altOf(first);
+  if (alt !== first) urls.push(alt);
+  const trail = [];
+  for (const u of urls) {
+    if (hasBrowser()) {
+      try {
+        const pg = await kino.browser.page(u, { timeoutMs: o.timeoutMs || 12000 });
+        if (pg && pg.html && pg.html.length > 500) {
+          return { html: pg.html, url: pg.finalUrl || u, how: "browser" };
+        }
+        trail.push("vacio");
+      } catch (e) {
+        trail.push("nav:" + ((e && e.code) || "error"));
+      }
     }
-  } catch (e) {}
-  return "";
+    try {
+      const r = await req(u);
+      if (r.status === 404) {
+        trail.push("404");
+        continue;
+      }
+      if (r.status < 400 && r.text && r.text.length > 500) {
+        return { html: r.text, url: u, how: "fetch" };
+      }
+      trail.push("http " + r.status);
+    } catch (e) {
+      trail.push("net:" + ((e && e.code) || "error"));
+    }
+  }
+  throw kino.error("unavailable", trail.join(" | "), {
+    userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
+  });
 }
 
 // ---------- texto ----------
@@ -92,116 +186,120 @@ function clean(s) {
     .trim();
 }
 
-function abs(u) {
-  if (!u) return "";
-  if (/^https?:\/\//i.test(u)) return u;
-  if (u.startsWith("//")) return "https:" + u;
-  return BASE + (u.startsWith("/") ? u : "/" + u);
-}
-
 function firstMatch(re, s) {
   const m = String(s).match(re);
   return m ? m[1] : "";
 }
 
-function slugOf(path) {
-  return String(path).replace(/^\//, "").replace(/[^A-Za-z0-9._~-]+/g, "_").slice(0, 128);
+function lastSeg(p) {
+  const parts = String(p).split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1].replace(/\.html$/, "") : "";
 }
 
-function uniq(arr) {
-  const seen = new Set();
-  const out = [];
-  for (const x of arr) {
-    if (!x || !x.id || seen.has(x.id)) continue;
-    seen.add(x.id);
-    out.push(x);
-  }
-  return out;
-}
-
-// ---------- tarjetas ----------
-const GENRE_OF_BADGE = {
-  "badge-movie": "peliculas",
-  "badge-series": "series",
-  "badge-anime": "anime",
-  "badge-dorama": "doramas",
-  "badge-toon": "infantil",
-};
-
-function parseCards(html) {
-  const items = [];
-  const chunks = String(html).split('class="card"').slice(1);
-  for (const c of chunks) {
-    const href = firstMatch(/href="([^"]+)"/, c);
-    if (!href || !/\/(pelicula|serie)\//.test(href)) continue;
-    const title = clean(firstMatch(/card__title">([\s\S]*?)<\//, c));
-    if (!title) continue;
-    const path = href.startsWith("http") ? new URL(href).pathname : href;
-    const poster = abs(
-      firstMatch(/class="card__poster"[^>]*src="([^"]+)"/, c) || firstMatch(/src="([^"]+)"/, c)
-    );
-    const year = parseInt(firstMatch(/card__year">\s*(\d{4})/, c), 10);
-    const badge = firstMatch(/card__badge\s+(badge-[a-z]+)/, c);
-    const isSeries = path.includes("/serie/") || (badge && badge !== "badge-movie");
-    const genre = GENRE_OF_BADGE[badge] || (isSeries ? "series" : "peliculas");
-    const item = {
-      id: slugOf(path),
-      ref: path,
-      title,
-      kind: isSeries ? "series" : "movie",
-      genres: [genre],
-    };
-    if (poster) item.poster = poster;
-    if (Number.isFinite(year)) item.year = year;
-    items.push(item);
-  }
-  return uniq(items);
+function idOf(path) {
+  return String(path).replace(/^\/+/, "").replace(/[\/?#]/g, "-");
 }
 
 function hasNext(html) {
-  return /rel="next"/.test(html);
+  return /rel="next"/.test(String(html));
 }
 
-// ---------- filas de la portada ----------
-const HOME_ROWS = [
-  { id: "movies", genre: "peliculas", ref: "/peliculas", title: "Películas recientes", titleEn: "Recent movies" },
-  { id: "series", genre: "series", ref: "/series", title: "Series", titleEn: "Series" },
-  { id: "anime", genre: "anime", ref: "/animes", title: "Anime", titleEn: "Anime" },
-  { id: "doramas", genre: "doramas", ref: "/doramas", title: "Doramas", titleEn: "Dramas" },
-  { id: "kids", genre: "infantil", ref: "/genero/kids", title: "Infantil", titleEn: "Kids" },
+// ---------- tarjetas ----------
+function parseCards(html) {
+  const items = [];
+  const seen = new Set();
+  const re = /<a\b[^>]*href="([^"]*\/(?:pelicula|serie)\/[^"\/?#]+)"[^>]*>([\s\S]{0,1500}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(String(html)))) {
+    const href = m[1];
+    const inner = m[2];
+    let path = href;
+    if (/^https?:\/\//i.test(href)) {
+      try {
+        path = new URL(href).pathname;
+      } catch (e) {
+        continue;
+      }
+    }
+    if (seen.has(path)) continue;
+    const poster = firstMatch(/data-src="([^"]+)"/, inner) || firstMatch(/\bsrc="([^"]+)"/, inner);
+    let text = clean(inner);
+    let kind = /\/serie\//.test(path) ? "series" : "movie";
+    if (/^(Anime|Dorama|Dibujos)\b/i.test(text)) kind = "series";
+    text = text.replace(/^(Pel[íi]cula(\s+de\s+TV)?|Serie|Anime|Dorama|Dibujos)\s*/i, "");
+    text = text.replace(/★\s*[\d.,]+/g, " ").replace(/\bNUEVO\b/gi, " ");
+    const yearM = text.match(/(\d{4})\s*$/);
+    const year = yearM ? parseInt(yearM[1], 10) : NaN;
+    if (yearM) text = text.slice(0, yearM.index);
+    const title = text.replace(/\s+/g, " ").trim();
+    if (!title || title.length > 200) continue;
+    seen.add(path);
+    const item = { id: idOf(path), title, kind, ref: path };
+    if (poster) item.poster = abs(poster);
+    if (Number.isFinite(year)) item.year = year;
+    items.push(item);
+  }
+  return items;
+}
+
+// ---------- portada ----------
+const SECTIONS = [
+  [/pel[íi]culas?\s*recientes/i, "peliculas", "Películas recientes", "Recent movies"],
+  [/series?\s*recientes/i, "series", "Series recientes", "Recent series"],
+  [/^animes?\b/i, "anime", "Anime", "Anime"],
+  [/doramas?\b/i, "doramas", "Doramas", "Dramas"],
+  [/reci[eé]n\s*a[ñn]adidos?/i, "nuevo", "Recién añadido", "Just added"],
+  [/netflix/i, "netflix", "Netflix", "Netflix"],
+  [/amazon|prime/i, "amazon", "Amazon Prime", "Amazon Prime"],
+  [/disney/i, "disney", "Disney+", "Disney+"],
+  [/apple/i, "apple", "Apple TV+", "Apple TV+"],
+  [/tokyo\s*mx/i, "tokyomx", "Tokyo Mx", "Tokyo Mx"],
+  [/tv\s*tokyo/i, "tvtokyo", "Tv Tokyo", "Tv Tokyo"],
 ];
 
-// ---------- home ----------
 export async function home() {
   await kino.sleep(0);
   let html = "";
   try {
-    html = await pageHtml(BASE + "/", 14000);
+    const pg = await readPage("/", { timeoutMs: 12000 });
+    html = pg.html;
   } catch (e) {
-    throw kino.error("unavailable", "portada " + ((e && e.code) || "error"), {
-      userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
-    });
-  }
-  const items = parseCards(html);
-  if (!items.length) {
-    throw kino.error("unavailable", "portada sin tarjetas", {
-      userMessage: t("El sitio cambió o no respondió. Prueba más tarde.", "The site changed or did not answer. Try later."),
+    throw kino.error("unavailable", "portada " + ((e && e.detail) || (e && e.code) || "error"), {
+      userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
     });
   }
   const rows = [];
-  for (const row of HOME_ROWS) {
-    const got = items.filter((it) => it.genres[0] === row.genre).slice(0, 30);
-    if (!got.length) continue;
-    rows.push({
-      id: row.id,
-      title: t(row.title, row.titleEn),
-      genre: row.genre,
-      ref: row.ref,
-      items: got,
-    });
+  const parts = String(html).split(/<h[23][^>]*>/i);
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    const heading = clean(part.slice(0, 200)).slice(0, 70);
+    let genre = "";
+    let esTitle = "";
+    let enTitle = "";
+    for (const s of SECTIONS) {
+      if (s[0].test(heading)) {
+        genre = s[1];
+        esTitle = s[2];
+        enTitle = s[3];
+        break;
+      }
+    }
+    if (!genre) continue;
+    if (rows.some((r) => r.genre === genre)) continue;
+    const items = parseCards(part).slice(0, 60);
+    if (!items.length) continue;
+    rows.push({ id: genre, genre, title: t(esTitle, enTitle), items });
+    if (rows.length >= 20) break;
   }
   if (!rows.length) {
-    throw kino.error("unavailable", "sin filas", {
+    const all = parseCards(html);
+    const movies = all.filter((x) => x.kind === "movie").slice(0, 60);
+    const series = all.filter((x) => x.kind === "series").slice(0, 60);
+    if (movies.length) rows.push({ id: "peliculas", genre: "peliculas", title: t("Películas", "Movies"), items: movies });
+    if (series.length) rows.push({ id: "series", genre: "series", title: t("Series", "Series"), items: series });
+  }
+  if (!rows.length) {
+    throw kino.error("unavailable", "portada sin filas", {
       userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
     });
   }
@@ -215,202 +313,195 @@ export async function search(query, opts) {
   if (!q) return { items: [] };
   const page = Number((opts && opts.page) || 1);
   const path = "/buscar?q=" + encodeURIComponent(q) + (page > 1 ? "&page=" + page : "");
-  const html = await pageHtml(abs(path), 12000);
-  return { items: parseCards(html).slice(0, 100), hasNext: hasNext(html) };
+  const r = await readPage(path, { timeoutMs: 12000 });
+  return { items: parseCards(r.html).slice(0, 100), hasNext: hasNext(r.html) };
 }
 
-// ---------- ver más ----------
-export async function browse(ref, opts) {
+// ---------- navegar ----------
+export async function browse(path, opts) {
   await kino.sleep(0);
   const page = Number((opts && opts.page) || 1);
-  const p = String(ref || "/peliculas");
+  const p = String(path || "/peliculas");
   const withPage = page > 1 ? p + (p.includes("?") ? "&" : "?") + "page=" + page : p;
-  const html = await pageHtml(abs(withPage), 12000);
-  return { items: parseCards(html).slice(0, 100), hasNext: hasNext(html) };
+  const r = await readPage(withPage, { timeoutMs: 12000 });
+  return { items: parseCards(r.html).slice(0, 100), hasNext: hasNext(r.html) };
 }
 
 // ---------- episodios ----------
 export async function episodes(ref) {
   await kino.sleep(0);
-  const html = await pageHtml(abs(ref), 14000);
+  const r = await readPage(abs(ref), { timeoutMs: 12000 });
+  const html = r.html;
   const items = [];
-  const panels = html.split(/data-season-panel="(\d+)"/);
-  for (let i = 1; i < panels.length; i += 2) {
-    const season = parseInt(panels[i], 10) || 1;
-    const body = panels[i + 1] || "";
-    const links = body.split('class="ep-item').slice(1);
-    for (const l of links) {
-      const href = firstMatch(/href="([^"]+)"/, l);
-      if (!href) continue;
-      const path = href.startsWith("http") ? new URL(href).pathname : href;
-      const numText = clean(firstMatch(/class="ep-num">([\s\S]*?)<\//, l));
-      const ep =
-        parseInt(firstMatch(/episodio-(\d+)/, path), 10) ||
-        parseInt(firstMatch(/(\d+)/, numText), 10) ||
-        1;
-      const label = clean(firstMatch(/text-sm font-semibold[^"]*">([\s\S]*?)<\//, l));
-      items.push({
-        id: slugOf(path),
-        ref: path,
-        title: "T" + season + "E" + String(ep).padStart(2, "0") + (label ? " · " + label : ""),
-        season,
-        episode: ep,
-        kind: "episode",
-      });
-    }
-  }
-  if (!items.length) {
-    throw kino.error("not_found", "sin episodios", {
-      userMessage: t("Esta serie todavía no tiene episodios.", "This series has no episodes yet."),
+  const seen = new Set();
+  const re = /<a\b[^>]*href="([^"]*\/temporada-(\d+)\/episodio-(\d+))"[^>]*>([\s\S]{0,400}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const path = m[1].startsWith("http") ? new URL(m[1]).pathname : m[1];
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const season = parseInt(m[2], 10) || 1;
+    const ep = parseInt(m[3], 10) || 1;
+    const label = clean(m[4])
+      .replace(/^(T\d+E\d+|Episodio\s*\d+|\d+)\s*[·:.\-–]?\s*/i, "")
+      .slice(0, 90);
+    items.push({
+      id: idOf(path),
+      title: "T" + season + "E" + String(ep).padStart(2, "0") + (label ? " · " + label : ""),
+      season,
+      episode: ep,
+      kind: "episode",
+      ref: path,
     });
   }
-  return { items: uniq(items) };
+  return { items };
 }
 
 // ---------- servidores ----------
 function parseServers(html) {
   const out = [];
-  const chunks = String(html).split('class="server-btn').slice(1);
-  for (const c of chunks) {
-    const token = firstMatch(/data-player-token="([^"]+)"/, c);
-    if (!token) continue;
-    const label = clean(firstMatch(/>([\s\S]*?)<\//, c));
-    out.push({ token, label: label || t("Servidor", "Server") });
+  const seen = new Set();
+  const re = /<[^>]*data-player-token="([^"]+)"[^>]*>([\s\S]{0,300}?)<\/(?:button|a|div|span)>/gi;
+  let m;
+  while ((m = re.exec(String(html)))) {
+    const token = m[1];
+    if (seen.has(token)) continue;
+    seen.add(token);
+    const tag = m[0].slice(0, m[0].indexOf(">") + 1);
+    const label =
+      clean(firstMatch(/data-(?:server|name|label)="([^"]+)"/, tag)) ||
+      clean(m[2]).slice(0, 40) ||
+      t("Servidor", "Server");
+    const lang = clean(firstMatch(/data-lang="([^"]+)"/, tag));
+    out.push({ token, label, lang });
   }
   return out;
 }
 
-function csrfOf(html) {
-  return firstMatch(/name="csrf-token" content="([^"]+)"/, html);
-}
-
-async function playerUrl(token, pageUrl, csrf) {
+async function playerUrl(token, pageUrl) {
   const origin = new URL(pageUrl).origin;
+  const cookieUrl = origin + "/sanctum/csrf-cookie";
+  try {
+    await req(cookieUrl, { headers: { accept: "*/*" } });
+  } catch (e) {}
+  let xsrf = cookieValue(origin + "/", "XSRF-TOKEN");
+  if (!xsrf) xsrf = cookieValue(cookieUrl, "XSRF-TOKEN");
+  let decoded = xsrf;
+  try {
+    decoded = decodeURIComponent(xsrf);
+  } catch (e) {}
+
   const headers = {
     accept: "application/json, text/plain, */*",
     "content-type": "application/json",
     origin,
     referer: pageUrl,
     "x-requested-with": "XMLHttpRequest",
+    "x-xsrf-token": decoded,
+    "x-sl-render": "1",
   };
-  if (csrf) headers["x-csrf-token"] = csrf;
-  const body = JSON.stringify({ token, player_token: token, _token: csrf || undefined });
-
-  let r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
-  if (r.status === 419) {
-    try {
-      await rawFetch(origin + "/sanctum/csrf-cookie", { minimal: true });
-    } catch (e) {}
-    const xsrf = cookieGet(origin + "/", "XSRF-TOKEN");
-    if (xsrf) {
-      let decoded = xsrf;
-      try {
-        decoded = decodeURIComponent(xsrf);
-      } catch (e) {}
-      headers["x-xsrf-token"] = decoded;
-    }
-    r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
-  }
+  const r = await req(origin + "/api/player-url", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ token, player_token: token }),
+  });
   if (r.status >= 400) throw kino.error("unavailable", "player-url " + r.status);
-
   let url = "";
   try {
     const j = JSON.parse(r.text);
     url = j.url || j.embed || j.player || (j.data && (j.data.url || j.data.embed)) || "";
   } catch (e) {
-    url = firstMatch(/(https?:\/\/[^\s"'\\]+)/, r.text);
+    url = firstMatch(/https?:\/\/[^\s"'\\]+/, r.text);
   }
   if (!url) throw kino.error("unavailable", "player-url vacio");
-  return abs(url);
+  return url;
 }
 
-// ---------- embed69: POW + AES ----------
-function sha256Hex(text) {
-  return String(kino.crypto.hash("sha256", text)).replace(/^0x/, "").toLowerCase();
+// ---------- cripto ----------
+function bytesToHex(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+  return s;
+}
+
+function hexToBytes(h) {
+  const out = new Uint8Array(Math.floor(String(h).length / 2));
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(String(h).substr(i * 2, 2), 16);
+  return out;
+}
+
+function b64ToBytes(s) {
+  const bin = atob(String(s));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToText(b) {
+  return new TextDecoder().decode(b);
+}
+
+async function sha256Hex(text) {
+  const bytes = new TextEncoder().encode(text);
+  let out;
+  try {
+    out = await kino.crypto.hash("sha256", bytes);
+  } catch (e) {
+    out = await kino.crypto.hash("sha256", text);
+  }
+  if (typeof out === "string") return out;
+  if (out instanceof Uint8Array) return bytesToHex(out);
+  if (out && out.bytes) return bytesToHex(out.bytes);
+  return bytesToHex(out);
+}
+
+async function aesDecrypt(keyBytes, ivBytes, dataBytes) {
+  const c = kino.crypto;
+  const tries = [
+    () => c.decrypt({ algo: "aes-cbc", key: keyBytes, iv: ivBytes, data: dataBytes }),
+    () => c.decrypt("aes-cbc", keyBytes, ivBytes, dataBytes),
+    () => c.decrypt({ algorithm: "AES-CBC", key: keyBytes, iv: ivBytes, data: dataBytes }),
+    () => c.decrypt("AES-CBC", keyBytes, ivBytes, dataBytes),
+  ];
+  let last;
+  for (const fn of tries) {
+    try {
+      const out = await fn();
+      if (out) return out;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last || kino.error("unavailable", "aes");
 }
 
 async function solvePow(salt, difficulty) {
-  const zeros = "0".repeat(Math.max(1, Math.min(difficulty, 6)));
-  for (let n = 0; n < 3000000; n++) {
-    if (sha256Hex(salt + n).startsWith(zeros)) return n;
-    if (n % 20000 === 19999) await kino.sleep(0);
+  const target = "0".repeat(Math.max(1, Math.min(difficulty, 6)));
+  for (let n = 0; n < 200000; n++) {
+    const h = await sha256Hex(salt + n);
+    if (h.startsWith(target)) return n;
+    if (n % 3000 === 2999) await kino.sleep(0);
   }
   return null;
 }
 
-async function aesDecrypt(key, iv, dataB64) {
-  const keyIsHex = /^[0-9a-f]+$/i.test(key) && key.length % 2 === 0;
-  const ivIsHex = /^[0-9a-f]+$/i.test(iv) && iv.length % 2 === 0;
-  return kino.crypto.decrypt("aes-cbc", {
-    key,
-    iv,
-    data: dataB64,
-    keyEncoding: keyIsHex ? "hex" : "base64",
-    ivEncoding: ivIsHex ? "hex" : "base64",
-    inputEncoding: "base64",
-    outputEncoding: "utf8",
-  });
-}
-
-// ---------- buscar el video en un embed ----------
-function decodeEscapes(s) {
-  return String(s)
-    .replace(/\\\//g, "/")
-    .replace(/\\u002F/gi, "/")
-    .replace(/\\u0026/gi, "&")
-    .replace(/&amp;/g, "&");
-}
-
-function unpackPacker(html) {
-  const m = String(html).match(
-    /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/
-  );
-  if (!m) return "";
-  const payload = m[1];
-  const base = parseInt(m[2], 10);
-  const words = m[4].split("|");
-  if (!base || base < 2) return "";
-  const enc = (c) =>
-    (c < base ? "" : enc(Math.floor(c / base))) +
-    (c % base > 35 ? String.fromCharCode((c % base) + 29) : (c % base).toString(36));
-  return payload.replace(/\b\w+\b/g, (w) => {
-    const idx = parseInt(w, base);
-    return Number.isFinite(idx) && words[idx] ? words[idx] : w;
-  });
-}
-
-function findMedia(text, baseUrl) {
-  const t2 = decodeEscapes(text);
-  const all = t2.match(/https?:\/\/[^\s"'\\<>,)]+?\.(?:m3u8|mp4)(?:\?[^\s"'\\<>,)]*)?/gi) || [];
-  if (all.length) {
-    const hls = all.find((u) => /\.m3u8/i.test(u));
-    return hls || all[0];
-  }
-  const rel = firstMatch(/(?:file|src|source)\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i, t2);
-  if (rel) {
-    if (/^https?:\/\//i.test(rel)) return rel;
-    try {
-      return new URL(baseUrl).origin + (rel.startsWith("/") ? rel : "/" + rel);
-    } catch (e) {
-      return rel;
+function pickFromPayload(text) {
+  const candidates = [];
+  const re = /https?:\/\/[^\s"'\\<>]+/g;
+  let m;
+  while ((m = re.exec(String(text)))) {
+    const u = m[0].replace(/\\\//g, "/").replace(/[),]+$/, "");
+    if (/\.(m3u8|mp4)(\?|$)/i.test(u)) {
+      return { url: u, mime: /m3u8/i.test(u) ? "application/vnd.apple.mpegurl" : "video/mp4" };
     }
+    if (/embed69\.org\/(video|f|e)\//.test(u) && !candidates.includes(u)) candidates.push(u);
+    else if (/\/f\/[A-Za-z0-9_-]+/.test(u) && !candidates.includes(u)) candidates.push(u);
   }
-  return "";
+  return candidates.length ? { embed: candidates[0] } : null;
 }
 
-function mimeOf(url) {
-  return /\.m3u8/i.test(url) ? "application/vnd.apple.mpegurl" : "video/mp4";
-}
-
-async function fromEmbed(embedUrl, referer) {
-  const r = await rawFetch(embedUrl, { headers: { referer: referer || BASE + "/" } });
-  let found = findMedia(r.text, embedUrl);
-  if (!found) found = findMedia(unpackPacker(r.text), embedUrl);
-  return found;
-}
-
-async function fromEmbed69(embedUrl, referer) {
-  const r = await rawFetch(embedUrl, { headers: { referer: referer || BASE + "/" } });
+async function embedStream(embedUrl) {
+  const r = await req(embedUrl, { headers: { referer: BASE + "/" } });
   const html = r.text;
 
   const dataB64 = firstMatch(/dataLink\s*[:=]\s*["']([A-Za-z0-9+/=]{16,})["']/, html);
@@ -427,147 +518,173 @@ async function fromEmbed69(embedUrl, referer) {
       for (const p of paths) {
         let j = null;
         try {
-          const kr = await rawFetch(origin + p, { headers: { accept: "application/json" } });
+          const kr = await req(origin + p, { headers: { accept: "application/json" } });
           if (kr.status < 400) j = JSON.parse(kr.text);
         } catch (e) {}
         if (!j) continue;
         const key = j.key || j.aesKey || (j.data && j.data.key);
         const iv = j.iv || (j.data && j.data.iv);
-        if (!key || !iv) continue;
+        if (!key) continue;
         try {
-          const plain = await aesDecrypt(key, iv, dataB64);
-          const found = findMedia(plain, embedUrl);
+          const keyBytes = /^[0-9a-f]{32,64}$/i.test(key) ? hexToBytes(key) : b64ToBytes(key);
+          const ivBytes = /^[0-9a-f]{32}$/i.test(iv) ? hexToBytes(iv) : b64ToBytes(iv);
+          const plain = bytesToText(await aesDecrypt(keyBytes, ivBytes, b64ToBytes(dataB64)));
+          const found = pickFromPayload(plain);
           if (found) return found;
         } catch (e) {}
       }
     }
   }
 
-  let found = findMedia(html, embedUrl);
-  if (!found) found = findMedia(unpackPacker(html), embedUrl);
-  return found;
+  const direct = pickFromPayload(html);
+  if (direct) return direct;
+  throw kino.error("unavailable", "embed");
 }
 
 // ---------- hosts de video ----------
 const HOST_MAP = [
-  [/morencius|mivalyo|dinisglows|dhtpre/, "vidhidepro"],
-  [/hglink|swdyu|cybervynx|dumbalag/, "streamwish"],
+  [/morencius|mivalyo|dinisglows|dhtpre|minochinos|sblona/, "vidhidepro"],
+  [/hglink|swdyu|cybervynx|dumbalag|lulu/, "streamwish"],
   [/filemoon/, "filemoon"],
 ];
-
-function lastSeg(p) {
-  const parts = String(p).split("/").filter(Boolean);
-  return parts.length ? parts[parts.length - 1].replace(/\.html$/, "") : "";
-}
 
 function normalize(url) {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, "");
     for (const [re, target] of HOST_MAP) {
-      if (!re.test(host)) continue;
-      const id = lastSeg(u.pathname);
-      if (!id) return url;
-      if (target === "filemoon") return "https://filemoon.sx/" + id;
-      if (target === "vidhidepro") return "https://vidhidepro.com/v/" + id;
-      if (target === "streamwish") return "https://streamwish.to/e/" + id;
+      if (re.test(host)) {
+        if (target === "filemoon") return "https://filemoon.sx" + u.pathname + u.search;
+        if (target === "vidhidepro") return "https://vidhidepro.com/v/" + lastSeg(u.pathname);
+        if (target === "streamwish") return "https://streamwish.to/e/" + lastSeg(u.pathname);
+      }
     }
   } catch (e) {}
   return url;
 }
 
-// ---------- un servidor ----------
-async function oneServer(token, pageUrl, csrf) {
-  const target = await playerUrl(token, pageUrl, csrf);
-  const referer = BASE + "/";
-  let url = "";
-  if (/embed69\.org/.test(target)) url = await fromEmbed69(target, referer);
-  if (!url) {
-    const norm = normalize(target);
-    url = await fromEmbed(norm, referer);
-    if (!url && norm !== target) url = await fromEmbed(target, referer);
+async function unpackHost(url) {
+  if (/\.(m3u8|mp4)(\?|$)/i.test(url)) {
+    return { url, mime: /m3u8/i.test(url) ? "application/vnd.apple.mpegurl" : "video/mp4" };
   }
-  if (!url) throw kino.error("unavailable", "sin video");
-  return { url, mime: mimeOf(url), headers: { Referer: referer } };
-}
-
-// ---------- respaldo: el navegador hace todo ----------
-async function captureMedia(pageUrl) {
-  if (!kino.browser || typeof kino.browser.capture !== "function") return null;
+  let host = "";
   try {
-    const res = await kino.browser.capture(pageUrl, {
-      timeoutMs: 24000,
-      autoplay: true,
-      headers: { referer: BASE + "/" },
-    });
-    const m = res && res.media && res.media[0];
-    if (!m || !m.url) return null;
-    return {
-      url: m.url,
-      mime: m.mime || mimeOf(m.url),
-      headers: m.headers || { Referer: BASE + "/" },
-    };
+    host = new URL(url).hostname;
+  } catch (e) {}
+  const referer = "https://" + host + "/";
+  let html = "";
+  try {
+    const r = await req(url, { headers: { referer } });
+    html = r.text;
   } catch (e) {
-    return null;
+    return { url, mime: "video/mp4", headers: { Referer: referer } };
   }
+  const found = pickFromPayload(html);
+  if (found && found.url) {
+    return {
+      url: found.url,
+      mime: found.mime,
+      headers: { Referer: referer },
+    };
+  }
+  const srcs = [];
+  const re = /(?:file|src|source|url)\s*[:=]\s*["']([^"']+)["']/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const u = m[1].replace(/\\\//g, "/");
+    if (/\.(m3u8|mp4)(\?|$)/i.test(u)) srcs.push(u);
+  }
+  if (srcs.length) {
+    const u = abs(srcs[0]);
+    return { url: u, mime: /m3u8/i.test(u) ? "application/vnd.apple.mpegurl" : "video/mp4", headers: { Referer: referer } };
+  }
+  return { url, mime: "video/mp4", headers: { Referer: referer } };
 }
 
 // ---------- resolve ----------
+async function oneServer(server, pageUrl) {
+  const target = await playerUrl(server.token, pageUrl);
+  let url = target;
+  let referer = pageUrl;
+  if (/embed69\.org/.test(target)) {
+    const step = await embedStream(target);
+    if (step.embed) {
+      const r2 = await req(step.embed, { headers: { referer: target } });
+      const inner = pickFromPayload(r2.text);
+      if (inner && inner.url) {
+        url = inner.url;
+      } else if (inner && inner.embed) {
+        const step2 = await embedStream(inner.embed);
+        url = step2.url || "";
+        referer = inner.embed;
+      }
+    } else {
+      url = step.url || "";
+      referer = target;
+    }
+  }
+  if (!url) throw kino.error("unavailable", "sin video");
+  const stream = await unpackHost(normalize(url));
+  return { url: stream.url, mime: stream.mime, headers: stream.headers || { Referer: referer } };
+}
+
 export async function resolve(ref) {
   await kino.sleep(0);
-  const raw = String(ref || "");
+  const parts = String(ref).split("|");
+  const pageUrl = abs(parts[0]);
+  const forced = parts[1] || "";
 
-  // alternativa: "<ruta>|<token>"
-  const bar = raw.indexOf("|");
-  if (bar > 0) {
-    const pageUrl = abs(raw.slice(0, bar));
-    const token = raw.slice(bar + 1);
-    const html = await pageHtml(pageUrl, 14000);
+  let html = "";
+  try {
+    const pg = await readPage(pageUrl, { timeoutMs: 15000 });
+    html = pg.html;
+  } catch (e) {
+    html = "";
+  }
+
+  const servers = parseServers(html);
+  const ordered = servers.slice().sort((a, b) => {
+    const score = (s) => (/latino|castellano|español|sub/i.test(s.label + " " + s.lang) ? 0 : 1);
+    return score(a) - score(b);
+  });
+  const pool = forced ? ordered.filter((s) => s.token === forced) : ordered;
+
+  const used = [];
+  let first = null;
+  for (const s of pool.slice(0, 3)) {
     try {
-      return await oneServer(token, pageUrl, csrfOf(html));
+      const st = await oneServer(s, pageUrl);
+      used.push(s);
+      first = st;
+      break;
     } catch (e) {
-      const cap = await captureMedia(pageUrl);
-      if (cap) return cap;
-      throw e;
+      used.push(s);
     }
   }
 
-  const pageUrl = abs(raw);
-  const html = await pageHtml(pageUrl, 16000);
-  const csrf = csrfOf(html);
-  const servers = parseServers(html);
-  if (!servers.length) {
-    throw kino.error("not_found", "sin servidores", {
-      userMessage: t("Este título no tiene servidores disponibles.", "This title has no servers available."),
-    });
-  }
-  const ordered = servers.slice().sort((a, b) => {
-    const score = (s) => (/latino|castellano|español|principal|⭐/i.test(s.label) ? 0 : 1);
-    return score(a) - score(b);
-  });
-
-  let first = null;
-  let usedToken = "";
-  for (const s of ordered.slice(0, 2)) {
+  if (!first && !forced && typeof kino.browser !== "undefined" && kino.browser && typeof kino.browser.capture === "function") {
     try {
-      first = await oneServer(s.token, pageUrl, csrf);
-      usedToken = s.token;
-      break;
+      const cap = await kino.browser.capture(pageUrl, { timeoutMs: 25000, autoplay: true });
+      const media = (cap && cap.media) || [];
+      if (media.length && media[0].url) {
+        first = { url: media[0].url, mime: media[0].mime || "video/mp4", headers: media[0].headers || {} };
+      }
     } catch (e) {}
   }
-  if (!first) first = await captureMedia(pageUrl);
+
   if (!first) {
-    throw kino.error("unavailable", "todos", {
+    throw kino.error("unavailable", "servidores " + used.length + "/" + servers.length, {
       userMessage: t("Ningún servidor respondió. Prueba otro título.", "No server answered. Try another title."),
     });
   }
 
-  const rest = ordered.filter((s) => s.token !== usedToken).slice(0, 8);
-  if (rest.length) {
-    first.alternatives = rest.map((s) => ({
-      label: s.label.slice(0, 48),
-      ref: pageUrl + "|" + s.token,
-    }));
-  }
-  return first;
+  const rest = forced ? [] : ordered.filter((s) => !used.includes(s)).slice(0, 6);
+  const alternatives = rest.map((s) => ({
+    label: String(s.label || t("Servidor", "Server")).slice(0, 40) + (s.lang ? " · " + s.lang : ""),
+    ref: parts[0] + "|" + s.token,
+  }));
+
+  const out = { url: first.url, mime: first.mime, headers: first.headers };
+  if (alternatives.length) out.alternatives = alternatives;
+  return out;
 }
