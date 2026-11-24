@@ -1,32 +1,40 @@
 {
-  "id": "kimera",
-  "name": "Kimera",
-  "version": "0.4.2",
-  "apiVersion": 14,
+  "id": "sololatino",
+  "name": "SoloLatino",
+  "description": "Películas, series, anime y doramas en español latino.",
+  "version": "1.0.0",
+  "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
   "author": "ghosti-vc",
-  "description": "Películas, series, dramas y animes de Kimera: estrenos, lo más visto y lo último agregado.",
-  "color": "#1c1f24",
-  "categories": ["movies", "series", "anime"],
-  "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
+  "resolveAhead": true,
+  "fetchHosts": "any",
   "streamHosts": "any",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve", "byteSource", "screen"],
-  "screen": {
-    "label": "Kimera",
-    "icon": "movie"
-  },
-  "recommends": ["kinotvapp/kino-social"],
-  "enhancements": {
-    "20": {
-      "consumes": {
-        "social": {
-          "repo": "kinotvapp/kino-social",
-          "calls": ["share"],
-          "door": "wall"
-        }
-      },
-      "openFrom": { "routes": ["detail"] }
-    }
-  }
+  "hosts": [
+    "sololatino.net",
+    "sololatino.co",
+    "embed69.org",
+    "player.pelisserieshoy.com",
+    "pelisserieshoy.com",
+    "morencius.com",
+    "minochinos.com",
+    "mivalyo.com",
+    "dinisglows.com",
+    "dhtpre.com",
+    "hglink.to",
+    "swdyu.com",
+    "cybervynx.com",
+    "dumbalag.com",
+    "sblona.com",
+    "lulu.st",
+    "uqload.io",
+    "do7go.com",
+    "filemoon.link",
+    "filemoon.sx",
+    "vidhidepro.com",
+    "streamwish.to",
+    "watchsb.com",
+    "uqload.com",
+    "dood.la"
+  ]
 }
