@@ -1,954 +1,771 @@
-// TuDorama - doramas, películas y variedades de tudorama.com, con el Latino primero (motor de PelisMAX).
-// Saca el video de VOE, Filemoon, StreamWish, Ok.ru y otros directamente (sin navegador) cuando se puede. No salta captchas.
+// Kino plugin: Kimera (kimeraweb.com).
+// El sitio sirve el video SIN audio y cada idioma en su propio playlist HLS. resolve() arma un
+// master con EXT-X-MEDIA para que el reproductor reciba imagen y sonido juntos; con el ajuste
+// "mix" apagado entrega el video y los idiomas como audioTracks.
 
-const REF = "https://tudorama.com/";
-const HOME_ROW = 20;
-// Orden de idiomas: Latino, Castellano, Coreano y después el resto. Pon SOLO_LATINO = true para mostrar únicamente Latino.
-const SOLO_LATINO = false;
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-
-// Cabeceras con las que el reproductor pide el video: muchos servidores responden 403 si falta el origen o el navegador.
-function playHeaders(pageUrl) {
-  const m = /^(https?:\/\/[^\/?#]+)/i.exec(String(pageUrl || ""));
-  const h = { Referer: pageUrl, "User-Agent": UA };
-  if (m) h.Origin = m[1];
-  return h;
-}
-const PAGE_VIEW = 40;
-const MAX_RESULTS = 100;
-
+const BASE = "https://kimeraweb.com";
+const CDN = "https://cloudcdn.sbs";
+const SOCIAL = "kinotvapp/kino-social";
+const TYPES = "movies|series|dramas|animes|donghuas|shorts";
+const AS_SERIES = new Set(["series", "dramas", "animes", "donghuas", "shorts"]);
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+  Accept: "text/html,application/xhtml+xml",
+  "Accept-Language": "es-CO,es;q=0.9",
+};
+const LINK = new RegExp('(?:href|data-href)="(?:https?:\\/\\/kimeraweb\\.com)?\\/(' + TYPES + ')\\/([^"]+)"', "gi");
+const BARE = new RegExp('\\/(' + TYPES + ')\\/([a-z0-9][a-z0-9-]*-\\d+)', "gi");
 
 function log(...args) {
-  try { kino.log(...args); } catch { /* el registro no debe romper nada */ }
-}
-
-// Textos que lee la persona: español por defecto, inglés si kino.lang es "en-US".
-function tr(es, en) {
-  return (typeof kino !== "undefined" && kino.lang === "en-US") ? en : es;
-}
-
-function decodeEntities(s) {
-  return String(s || "")
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;|&apos;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .trim();
-}
-
-function stripTags(s) {
-  return decodeEntities(String(s || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
-}
-
-
-function attr(tag, name) {
-  const a = new RegExp(name + "=([\"'])([^\"']*)\\1", "i").exec(tag);
-  return a ? a[2] : "";
-}
-
-// ---- Episodios --------------------------------------------------------------------------------
-
-// ---- DoramasYT: episodios y reproducción ------------------------------------------------------
-
-
-function hostOf(u) {
-  const m = /^https?:\/\/([^\/?#]+)/i.exec(String(u || ""));
-  return m ? m[1] : "";
-}
-
-// Forma de la ruta sin el código: /e/xxxx -> "/e/". Sirve para el registro sin filtrar enlaces.
-function pathShape(u) {
-  const m = /^https?:\/\/[^\/?#]+(\/[^?#]*)?/i.exec(String(u || ""));
-  const p = m && m[1] ? m[1] : "";
-  return p.replace(/[A-Za-z0-9_-]{8,}/g, "~").slice(0, 40);
-}
-
-function absUrl(u) {
-  let x = String(u || "").trim();
-  if (x.startsWith("//")) x = "https:" + x;
-  return /^https:\/\//i.test(x) ? x : "";
-}
-
-// -- Lectura de reproductores embebidos ---------------------------------------------------------
-// Muchos reproductores esconden el video: dentro de un script "empaquetado" (eval(function(p,a,c,k,e,d)...)
-// o en un texto en base64 (atob). Aquí se desarman, sin ejecutar nada, para buscar el .m3u8 / .mp4.
-
-const MEDIA_RE = /["'`]((?:https?:)?\/\/[^"'`\s<>\\]+?\.(?:m3u8|mp4)(?:\?[^"'`\s<>\\]*)?)["'`]/i;
-
-// Videos de prueba que traen los reproductores y sus librerías (Big Buck Bunny y compañía).
-// Nunca son el capítulo: se descartan para no mostrarlos por error.
-const DEMO_MEDIA = /pinup_preroll|[_\/-]preroll[_.\/-]|agl00\d\.com|big[_-]?buck[_-]?bunny|\bbbb[_-]|sintel|elephants?[_-]?dream|tears[_-]?of[_-]?steel|gtv-videos-bucket|commondatastorage|test-?streams|bitdash|bitmovin|mux\.dev|zencdn|oceans\.mp4|flowplayer\.com|jwplatform|\/samples?\/|(?:googleapis|gstatic|jsdelivr|cdnjs|unpkg)\./i;
-// Los enlaces de streamtape.com/e/... son la página del reproductor (no el video) y el sitio responde 403: se descartan.
-const isDemo = (u) => DEMO_MEDIA.test(String(u || "")) || /streamtape\.[a-z]+\/e\//i.test(String(u || ""));
-
-function normText(s) {
-  return String(s || "").replace(/\\\//g, "/").replace(/\\u0026/gi, "&").replace(/&amp;/g, "&");
-}
-
-// Desarma un script empaquetado con el método clásico "p,a,c,k,e,d".
-function unpackPacked(src) {
-  const re = /\}\s*\(\s*(['"])((?:\\[\s\S]|(?!\1)[^\\])*)\1\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(['"])((?:\\[\s\S]|(?!\5)[^\\])*)\5\s*\.split\(\s*['"]\|['"]\s*\)/;
-  const m = re.exec(src);
-  if (!m) return null;
-  const payload = m[2].replace(/\\(['"\\])/g, "$1").replace(/\\n/g, "\n");
-  const radix = Number(m[3]);
-  let count = Number(m[4]);
-  if (!(radix >= 2 && radix <= 62) || !(count > 0 && count < 100000)) return null;
-  const dict = m[6].split("|");
-  const enc = (c) => (c < radix ? "" : enc(Math.floor(c / radix))) + ((c = c % radix) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
-  const map = {};
-  while (count--) map[enc(count)] = dict[count] || enc(count);
-  return payload.replace(/\b\w+\b/g, (w) => (map[w] != null ? map[w] : w));
-}
-
-function unpackAll(html) {
-  const out = [];
-  let i = 0;
-  while (out.length < 4) {
-    const k = html.indexOf("eval(function(p,a,c,k,e", i);
-    if (k < 0) break;
-    const u = unpackPacked(html.slice(k, k + 80000));
-    if (u) out.push(u);
-    i = k + 20;
-  }
-  return out;
-}
-
-function base64Texts(html) {
-  const out = [];
-  const re = /atob\(\s*["']([A-Za-z0-9+\/=_-]{16,})["']\s*\)/g;
-  let m;
-  while ((m = re.exec(html)) && out.length < 6) {
-    try { out.push(atob(m[1].replace(/-/g, "+").replace(/_/g, "/"))); } catch (e) { /* no era base64 */ }
-  }
-  return out;
-}
-
-function findMedia(text) {
-  const re = new RegExp(MEDIA_RE.source, "gi");
-  const t = normText(text);
-  let m;
-  while ((m = re.exec(t))) {
-    const u = absUrl(m[1]);
-    if (u && !isDemo(u)) return u;
-    if (u) log("video de muestra descartado: " + hostOf(u) + pathShape(u));
-  }
-  return "";
-}
-
-// Igual, pero sin exigir comillas: el texto que sale de un base64 suele ser el enlace "pelado".
-function findMediaLoose(text) {
-  const re = /((?:https?:)?\/\/[^\s"'`<>\\]+?\.(?:m3u8|mp4)(?:\?[^\s"'`<>\\]*)?)/gi;
-  const t = normText(text);
-  let m;
-  while ((m = re.exec(t))) {
-    const u = absUrl(m[1]);
-    if (u && !isDemo(u)) return u;
-    if (u) log("video de muestra descartado: " + hostOf(u) + pathShape(u));
-  }
-  return "";
-}
-
-// Busca el video escrito en la página, en sus scripts empaquetados o en sus textos base64.
-function deepMedia(html) {
-  let u = findMedia(html);
-  if (u) return u;
-  for (const t of unpackAll(html)) { u = findMedia(t); if (u) return u; }
-  for (const t of base64Texts(html)) { u = findMediaLoose(t); if (u) return u; }
-  return "";
-}
-
-const SKIP_HOST = /(google|gstatic|facebook|doubleclick|googletagmanager|cloudflare|jsdelivr|cdnjs|jquery|bootstrap|fontawesome|histats|yandex)/i;
-
-// Enlaces a otras páginas de reproductor que esta página abre o inserta (iframes y textos de script).
-function embedLinks(html, base) {
-  const texts = [html].concat(unpackAll(html), base64Texts(html));
-  const out = [];
-  const add = (u) => {
-    const a = absUrl(u);
-    if (!a || a === base || out.indexOf(a) >= 0) return;
-    if (SKIP_HOST.test(hostOf(a))) return;
-    if (/\.(?:js|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf)(\?|$)/i.test(a)) return;
-    out.push(a);
-  };
-  const decoded = base64Texts(html);
-  for (const raw of texts) {
-    const t = normText(raw);
-    const fr = /<iframe[^>]*src=["']([^"']+)["']/gi;
-    let f;
-    while ((f = fr.exec(t))) add(f[1]);
-    const ur = /["'`]((?:https?:)?\/\/[^"'`\s<>\\]+)["'`]/g;
-    let u;
-    while ((u = ur.exec(t))) {
-      if (/\/(?:e|embed|v|f|play|player|stream|d)\/[A-Za-z0-9_-]{6,}/i.test(u[1])) add(u[1]);
-    }
-  }
-  // Lo que sale de un base64 suele ser el enlace "pelado", sin comillas.
-  for (const raw of decoded) {
-    const bare = /(?:https?:)?\/\/[^\s"'`<>\\]+/g;
-    let b;
-    while ((b = bare.exec(normText(raw)))) add(b[0]);
-  }
-  return out.slice(0, 4);
-}
-
-function redact(s) {
-  return String(s || "")
-    .replace(/https?:\/\/[^\s"'<>]+/g, (u) => hostOf(u) + pathShape(u))
-    .replace(/[A-Za-z0-9+\/=_-]{16,}/g, "~")
-    .replace(/\s+/g, " ")
-    .slice(0, 240);
-}
-
-// Radiografía de una página de reproductor para el registro (sin códigos ni enlaces completos).
-function diag(html, depth, found) {
-  const title = /<title[^>]*>([^<]*)/i.exec(html);
-  const scripts = [];
-  const sre = /<script([^>]*)>([\s\S]*?)<\/script>/gi;
-  let s;
-  while ((s = sre.exec(html))) scripts.push({ attrs: s[1], body: s[2] });
-  const ext = scripts.map((x) => attr("<s " + x.attrs + ">", "src")).filter(Boolean).map((x) => hostOf(absUrl(x))).filter(Boolean);
-  const inline = scripts.filter((x) => x.body.trim()).sort((a, b) => b.body.length - a.body.length);
-  const links = embedLinks(html, "").map((u) => hostOf(u) + pathShape(u));
-  log("embed[" + depth + "] bytes=" + html.length + " titulo=" + (title ? title[1].trim().slice(0, 40) : "-") +
-    " video=" + (found ? "si" : "no") + " packed=" + unpackAll(html).length + " atob=" + base64Texts(html).length +
-    " tagVideo=" + /<video[\s>]/i.test(html) + " iframes=" + (html.split("<iframe").length - 1) +
-    " scriptsExt=" + ext.slice(0, 4).join(",") + " scriptsInline=" + inline.length + " enlaces=" + links.join(","));
-  if (!found && inline.length) log("embed[" + depth + "] script mayor: " + redact(inline[0].body));
-}
-
-// Lee la página de un reproductor y busca el video; si no está, sigue los reproductores que esa
-// página abre (hasta 2 niveles), porque el de TuDorama suele ser solo una envoltura.
-const innerHosts = new Map(); // envoltura -> a qué reproductores apunta
-
-// ok.ru guarda el video en un bloque de datos de su página ("hlsManifestUrl" o la lista de calidades).
-function okruMedia(html) {
-  const t = String(html || "").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
-  const clean = (u) => String(u).replace(/\\+u0026/gi, "&").replace(/\\+\//g, "/");
-  for (const key of ["hlsManifestUrl", "ondemandHls", "hlsMasterPlaylistUrl"]) {
-    const m = new RegExp('\\\\*"' + key + '\\\\*"\\s*:\\s*\\\\*"(https?:[^"]*?)\\\\*"').exec(t);
-    if (m) return clean(m[1]);
-  }
-  const order = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"];
-  let best = "", bestRank = 99;
-  const re = /\\*"name\\*"\s*:\s*\\*"([a-z]+)\\*"\s*,\s*\\*"url\\*"\s*:\s*\\*"(https?:[^"]*?)\\*"/g;
-  let m;
-  while ((m = re.exec(t))) { const i = order.indexOf(m[1]); const rk = i < 0 ? 50 : i; if (rk < bestRank) { bestRank = rk; best = clean(m[2]); } }
-  return best;
-}
-
-async function embedFromHtml(embedUrl, depth, referer) {
-  const d = depth || 0;
-  if (isHoster(embedUrl)) {
-    try {
-      const hm = await hosterMedia(embedUrl, referer);
-      if (hm) { log("hoster directo: " + hostOf(embedUrl) + " -> " + hostOf(hm.url)); return hm; }
-      log("hoster " + hostOf(embedUrl) + ": sin video directo, sigo con el método normal");
-    } catch (e) { log("hoster " + hostOf(embedUrl) + " falló: " + String((e && e.message) || e).slice(0, 60)); }
-  }
-  const r = await kino.fetch(embedUrl, { headers: { Referer: referer || REF } });
-  log("embed[" + d + "] " + hostOf(embedUrl) + pathShape(embedUrl) + " status=" + r.status);
-  if (!r.ok) return null;
-  let html = await r.text();
-  let u = deepMedia(html);
-  if (!u && /(^|\.)ok\.ru$/i.test(hostOf(embedUrl))) { u = okruMedia(html); if (u) log("ok.ru: video encontrado"); }
-  if (d === 0) innerHosts.set(embedUrl, embedLinks(html, embedUrl).map(hostOf));
-  // Una página diminuta, sin video ni enlaces, suele ser una pantalla de comprobación del servidor:
-  // con la cookie que acaba de dejar, el segundo intento trae la página real. Un solo reintento.
-  if (!u && d >= 1 && html.length < 3000 && !/byse/i.test(hostOf(embedUrl)) && !embedLinks(html, embedUrl).length) {
-    log("embed[" + d + "] página diminuta (" + html.length + " bytes): reintento");
-    if (typeof kino.sleep === "function") await kino.sleep(900);
-    const r2 = await kino.fetch(embedUrl, { headers: { Referer: referer || REF } });
-    if (r2.ok) {
-      const h2 = await r2.text();
-      if (h2.length > html.length) { html = h2; u = deepMedia(html); }
-    }
-  }
-  diag(html, d, !!u);
-  if (u) {
-    log("embed[" + d + "] video elegido: " + hostOf(u) + pathShape(u));
-    return { url: u, mime: /\.m3u8/i.test(u) ? "application/x-mpegurl" : "video/mp4", headers: playHeaders(embedUrl) };
-  }
-  if (d >= 2) return null;
-  const links = embedLinks(html, embedUrl).filter((l) => !/byse/i.test(hostOf(l))).slice(0, d === 0 ? 3 : 2);
-  for (const l of links) {
-    try {
-      const got = await embedFromHtml(l, d + 1, embedUrl);
-      if (got) return got;
-    } catch (e) {
-      log("embed[" + (d + 1) + "] falló: " + String((e && e.message) || e).slice(0, 60));
-    }
-  }
-  return null;
-}
-
-async function captureEmbed(embedUrl, ms, referer) {
-  if (typeof kino === "undefined" || !kino.browser || typeof kino.browser.capture !== "function") return null;
-  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms, headers: { Referer: referer || REF } });
-  const media = page && Array.isArray(page.media) ? page.media : [];
-  const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url) && !isDemo(x.url));
-  if (!first) return null;
-  const out = { url: first.url, mime: first.mime || first.mimeType || (/\.m3u8(\?|$)/i.test(first.url) ? "application/x-mpegurl" : "video/mp4") };
-  // Si el navegador no entrega cabeceras, el reproductor pedía el video sin Referer/Origin y el servidor respondía 403.
-  const hd = playHeaders(embedUrl);
-  if (first.headers && typeof first.headers === "object") Object.assign(hd, first.headers);
-  out.headers = hd;
-  return out;
-}
-
-
-// ---- Extractores directos por servidor (tomados de Kino Resolver) --------------------------------
-// Para los servidores más comunes se saca el video leyendo la página (o la API del servidor), sin
-// abrir el navegador. Si no logran nada, se sigue con el método de siempre.
-
-const H_VOE = /voe\.sx|voe-unblock|voeunbl|voeun|edwardarriveoften|yodelswartlike|nathanfromsubject|reputationsheriff|fittingcentermondaysunday|tinycat-voe-fashion|scatch176duplicities|arianathankspecial|cloudwindow-route/i;
-const H_WISH = /stream.?wish|strwish|embedwish|wishembed|awish|dwish|mwish|wishfast|sfastwish|flaswish|obeywish|cdnwish|asnwish|flastwish|jodwish|swhoi|swdyu|wishonly|playerwish|hlswish|iplayerhls|hlsflast|ghbrisk|cybervynx|streamhg|hlsflex|hglink|hgplaycdn|vibuxer|yuguaab/i;
-const H_TAPE = /streamtape|strtape|strcloud|stape|tapewithadblock|streamadblock|watchadsontape|shavetape|strtpe/i;
-const H_HIDE = /streamhide|playhide|guccihide|moviesm4u|louishide|ahvsh|movhide/i;
-const H_LARE = /streamlare|slmaxed|slwatch|sltube|streamlure/i;
-const H_VIMEOS = /\bvimeos\.(net|zip|to|sx|cc|xyz|lol|art|fun)\b/i;
-
-const hx = (re, s, i) => { const m = re.exec(String(s || "")); return m ? m[i === undefined ? 1 : i] : ""; };
-const rot13 = (s) => s.replace(/[a-zA-Z]/g, (c) => { const b = c <= "Z" ? 65 : 97; return String.fromCharCode(b + ((c.charCodeAt(0) - b + 13) % 26)); });
-const b64 = (s) => { try { return atob(String(s).replace(/[^A-Za-z0-9+\/=_-]/g, "").replace(/-/g, "+").replace(/_/g, "/")); } catch (e) { return ""; } };
-
-function voeDecode(html) {
   try {
-    const raw = hx(/<script type="application\/json">(\[".*?"\])<\/script>/s, html);
-    if (!raw) return null;
-    let s = rot13(JSON.parse(raw)[0]);
-    for (const j of ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]) s = s.split(j).join("");
-    const d1 = b64(s);
-    let sh = "";
-    for (let i = 0; i < d1.length; i++) sh += String.fromCharCode((d1.charCodeAt(i) - 3 + 256) % 256);
-    return JSON.parse(b64(sh.split("").reverse().join("")));
-  } catch (e) { return null; }
+    kino.log(...args);
+  } catch {
+    // el registro se pierde, el resultado no
+  }
 }
 
-function packedOf(html) {
-  const outs = [];
-  let i = 0;
-  while (outs.length < 4) {
-    const k = html.indexOf("eval(function(p,a,c,k,e", i);
-    if (k < 0) break;
-    const u = unpackPacked(html.slice(k, k + 80000));
-    if (u) outs.push(u);
-    i = k + 20;
-  }
-  return outs;
+function t(es, en) {
+  return String(kino.lang || "es").toLowerCase().startsWith("en") ? en : es;
 }
-const fileOfPacked = (html) => {
-  for (const t of packedOf(html)) {
-    const f = hx(/(?:file|"hls\d?")\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"/i, t) || hx(/(?:file|"hls\d?")\s*:\s*"(https?:[^"]+)"/i, t) || hx(/sources\s*:\s*\[\s*\{\s*file\s*:\s*"([^"]+)"/i, t) || hx(/src\s*:\s*"(https?:[^"]+)"/i, t);
-    if (f) return f;
+
+function setting(key, fallback) {
+  try {
+    const value = typeof kino.config.get === "function" ? kino.config.get(key) : kino.config[key];
+    return value === undefined || value === null ? fallback : value;
+  } catch {
+    return fallback;
   }
+}
+
+async function body(answer) {
+  if (typeof answer.text === "function") return await answer.text();
+  if (typeof answer.json === "function") return JSON.stringify(await answer.json());
   return "";
-};
-const fixU = (u) => String(u || "").replace(/\\\//g, "/").replace(/&amp;/g, "&");
-const okU = (u) => /^https?:\/\//i.test(u || "") && !isDemo(u);
+}
 
-// Devuelve { url, mime, headers } o null.
-async function hosterMedia(url, refer) {
-  const h = hostOf(url);
-  const RF = refer || REF;
-  const page = async (u, hdr) => {
-    const r = await kino.fetch(u, { headers: hdr || { Referer: RF } });
-    if (!r.ok) { log("hoster " + hostOf(u) + " status=" + r.status); return ""; }
-    return await r.text();
-  };
-  const out = (u, referer, extra) => {
-    u = fixU(u);
-    if (!okU(u)) return null;
-    const hd = referer ? playHeaders(referer) : undefined;
-    const o = { url: u, mime: /\.m3u8/i.test(u) ? "application/x-mpegurl" : "video/mp4" };
-    if (hd || extra) o.headers = Object.assign({}, hd || {}, extra || {});
-    return o;
-  };
-  let html, u;
+function decode(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)));
+}
 
-  if (H_VOE.test(h)) {
-    const id = hx(/voe\.sx\/(?:e\/)?([A-Za-z0-9]+)/i, url);
-    const first = id ? "https://voe.sx/e/" + id : url;
-    html = await page(first, { Referer: RF });
-    if (/permanentToken|Redirecting/.test(html)) {
-      const r = hx(/window\.location\.href\s*=\s*'(https?:\/\/[^']+)'/, html);
-      if (r) html = await page(r, { Referer: "https://voe.sx/" });
-    }
-    if (/File not found|no longer available|Error 404/i.test(html)) return null;
-    const d = voeDecode(html);
-    if (d) { u = d.source || d.direct_access_url; if (u) return out(u, "https://voe.sx/"); }
-    u = hx(/(?:mp4|hls)'\s*:\s*'([^']+)'/, html);
-    if (u && u.startsWith("aHR0")) u = b64(u);
-    if (!u) { try { const v = hx(/let\s+[0-9a-f]+\s*=\s*'(.*?)'/i, html); const j = JSON.parse(b64(v).split("").reverse().join("")); u = j.file; } catch (e) { /* nada */ } }
-    return u ? out(u, "https://voe.sx/") : null;
-  }
+function text(value) {
+  const plain = decode(String(value || "").replace(/<[^>]*>/g, " "));
+  const flat = typeof plain.normalize === "function" ? plain.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : plain;
+  return flat.toLowerCase().replace(/\s+/g, " ").trim();
+}
 
-  if (H_VIMEOS.test(h)) {
-    const ref = "https://" + h + "/";
-    html = await page(url, { Referer: ref });
-    if (/File not found|deleted|no longer available/i.test(html)) return null;
-    for (const t of packedOf(html)) {
-      u = hx(/file\s*:\s*["']([^"']+\.m3u8[^"']*)/i, t) || hx(/(https?:\/\/[^"']+\.m3u8[^"']*)/i, t) || hx(/file\s*:\s*["'](https?:[^"']+)["']/i, t);
-      if (u) return out(u, ref);
-    }
+function attr(attrs, name) {
+  const found = new RegExp(name + '="([^"]*)"').exec(attrs);
+  return found ? found[1] : "";
+}
+
+function https(value) {
+  let url = String(value || "");
+  if (url.startsWith("/")) url = CDN + url;
+  return url.startsWith(CDN + "/") ? url : undefined;
+}
+
+function absUrl(base, ref) {
+  if (/^https?:\/\//i.test(ref)) return ref;
+  const origin = (/^(https?:\/\/[^\/]+)/i.exec(base) || [])[1] || "";
+  if (ref.startsWith("/")) return origin + ref;
+  return base.replace(/[?#].*$/, "").replace(/[^\/]*$/, "") + ref;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function json(html, key) {
+  const found = new RegExp('<script type="application/json"[^>]*(?:id="' + key + '"|data-element="' + key + '")[^>]*>([\\s\\S]*?)<\\/script>').exec(html);
+  if (!found) return null;
+  try {
+    return JSON.parse(found[1]);
+  } catch {
     return null;
   }
-
-  if (H_TAPE.test(h)) {
-    const tok = async (p) => {
-      const t = await page(p, { Referer: p });
-      if (/Video not found/i.test(t)) return null;
-      return hx(/getElementById\('\w+link'\)\.innerHTML\s*=\s*"[^"]+"\s*.*?\('[^']*?\/([^']+)'\)/s, t);
-    };
-    const norm = url.replace("/v/", "/e/").replace(/\/e\/e\//, "/e/");
-    let t = await tok(norm);
-    if (!t) t = await tok(norm.replace("/e/", "/v/"));
-    return t ? out("https://streamtape.com/" + t + "&stream=1", norm) : null;
-  }
-
-  if (H_LARE.test(h)) {
-    const id = hx(/\/[ev]\/(\w+)/, url);
-    if (!id) return null;
-    const r = await kino.fetch("https://streamlare.com/api/video/stream/get", { method: "POST", body: { form: { id } } });
-    let j = null;
-    try { j = JSON.parse(await r.text()); } catch (e) { /* nada */ }
-    u = j && j.result && j.result.file;
-    return u ? out(u, url) : null;
-  }
-
-  if (/(^|\.)ok\.ru$|okru\.link|odnoklassniki/i.test(h)) {
-    if (/okru\.link\/v2/.test(url)) {
-      const v = hx(/t=([\w.]+)/, url);
-      const r = await kino.fetch("https://apizz.okru.link/decoding", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: url }, body: { form: { video: v } } });
-      const d = await r.text();
-      u = hx(/"url":"(.*?)"/, d);
-      return u ? out(u) : null;
-    }
-    if (/okru\.link/.test(url)) {
-      const d = await page("https://okru.link/details.php?v=" + hx(/t=(\w+)/, url), { Referer: REF });
-      u = hx(/"file":"(.*?)"/, d);
-      return u ? out(u) : null;
-    }
-    html = await page(url, { Referer: "https://ok.ru/" });
-    u = okruMedia(html);
-    return u ? out(u, "https://ok.ru/") : null;
-  }
-
-  if (H_WISH.test(h) || H_HIDE.test(h) || /streamvid|vidstreamz|fastream|supervideo|vidmoly|mp4upload|uqload|vidoza|videzz|lulu(?:stream|vdo)/i.test(h)) {
-    let ref = RF, extra;
-    let p = url;
-    if (/uqload/i.test(h)) { ref = "https://uqload.com/"; }
-    if (/supervideo/i.test(h)) { ref = "https://supervideo.cc/"; if (!/\/e\//.test(p)) p = p.replace("supervideo.cc/", "supervideo.cc/e/"); }
-    if (/mp4upload/i.test(h) && !/embed-/.test(p)) p = p.replace(/mp4upload\.com\//, "mp4upload.com/embed-") + (/\.html/.test(p) ? "" : ".html");
-    const hdr = { Referer: ref };
-    if (/uqload/i.test(h)) hdr.Origin = ref;
-    if (/vidmoly/i.test(h)) {
-      p = p.replace("/embed-", "/").replace(/\/[dwv]\//, "/");
-      if (!/\.html/.test(p)) p += ".html";
-      hdr.cookie = "cf_turnstile_demo_pass_" + p.replace(/^https?:\/\/[^\/]+\//, "").replace(".html", "") + "=1";
-      hdr.Referer = RF;
-    }
-    html = await page(p, hdr);
-    if (!html || /File (?:was )?(?:not found|deleted)|no longer available|Video not found|>Security Check</i.test(html)) return null;
-    u = "";
-    if (/vidoza|videzz|lulu(?:stream|vdo)/i.test(h)) {
-      const s = hx(/sourcesCode\s*:\s*(\[\{.*?\}\])/s, html).replace(/(\w+):/g, '"$1":');
-      try { const arr = JSON.parse(s); u = (arr[arr.length - 1] || {}).src || (arr[arr.length - 1] || {}).file; } catch (e) { /* nada */ }
-    }
-    if (!u) u = fileOfPacked(html);
-    if (!u) u = hx(/sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']+)["']/, html) || hx(/sources\s*:\s*\[\s*["'](https?:[^"']+)["']/, html);
-    if (!u && /mp4upload/i.test(h)) u = hx(/"(https[^"]+\.mp4)"/, html) || hx(/"file":"([^"]+)/, html) || hx(/src:"([^"]+)/, html);
-    if (!u) return null;
-    if (/uqload|supervideo/i.test(h)) extra = { Origin: ref.replace(/\/$/, "") };
-    return out(u, /mp4upload/i.test(h) ? p : ref === RF ? p : ref, extra);
-  }
-  return null;
 }
 
-const HOSTER_RE = new RegExp([H_VOE, H_WISH, H_TAPE, H_HIDE, H_LARE, H_VIMEOS].map((r) => r.source).join("|") + "|(?:^|\\.)ok\\.ru$|okru\\.link|streamvid|vidstreamz|fastream|supervideo|vidmoly|mp4upload|uqload|vidoza|videzz|lulu(?:stream|vdo)", "i");
-const isHoster = (u) => HOSTER_RE.test(hostOf(u));
-
-// Devuelve el primer resultado que llegue (no el último): { v, i } o null si ninguno entrega nada.
-function firstSuccess(tasks) {
-  return new Promise((resolveAll) => {
-    let pending = tasks.length;
-    if (!pending) { resolveAll(null); return; }
-    tasks.forEach((t, i) => {
-      Promise.resolve(t).then((v) => { if (v) resolveAll({ v, i }); }, () => {}).then(() => {
-        pending--;
-        if (pending === 0) resolveAll(null);
-      });
-    });
-  });
+function splitRef(ref) {
+  const at = String(ref || "").indexOf("|");
+  if (at === -1) return [String(ref || ""), ""];
+  return [ref.slice(0, at), ref.slice(at + 1)];
 }
 
-// ---- Lectura de los sitios ----------------------------------------------------------------------
-
-async function getText(url, headers) {
-  let r;
-  try {
-    r = await kino.fetch(url, headers ? { headers } : undefined);
-  } catch (e) {
-    log("fetch falló " + hostOf(url) + ": " + String((e && e.message) || e).slice(0, 80));
-    throw kino.error("unavailable", "fetch falló", {
-      userMessage: tr("No se pudo abrir el sitio. Prueba de nuevo en un momento.", "Could not open the site. Try again in a moment."),
-    });
-  }
-  if (!r.ok) {
-    log("fetch " + hostOf(url) + pathShape(url) + " status=" + r.status);
-    const um = { userMessage: tr("El sitio respondió con el error " + r.status + ".", "The site answered with error " + r.status + ".") };
-    if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404", um);
-    if (r.status === 429) throw kino.error("rate_limited", "el sitio respondió 429", um);
-    throw kino.error("unavailable", "el sitio respondió " + r.status, um);
-  }
-  return r.text();
-}
-
-async function getJson(url, referer) {
-  const t = await getText(url, { Accept: "application/json, text/plain, */*", Referer: referer || REF });
-  try { return JSON.parse(t); } catch (e) {
-    log("json inválido " + hostOf(url) + pathShape(url) + " inicio=" + redact(t.slice(0, 120)));
-    throw kino.error("unavailable", "respuesta no válida", { userMessage: tr("El sitio respondió algo inesperado.", "The site answered something unexpected.") });
-  }
-}
-
-const enc = encodeURIComponent;
-const dec = (s) => { try { return decodeURIComponent(s); } catch (e) { return String(s || ""); } };
-
-function tmdbPoster(p) {
-  if (!p) return undefined;
-  p = String(p);
-  if (p.charAt(0) === "/") return "https://image.tmdb.org/t/p/w342" + p;
-  return /^https?:\/\//i.test(p) ? p : undefined;
-}
-
-function mkItem(src, kind, key, title, poster, year) {
-  const t = stripTags(title);
-  if (!t) return null;
-  return {
-    id: src + "-" + String(key).replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80),
-    ref: src + "|" + (kind === "movie" ? "m" : kind === "anime" ? "a" : "s") + "|" + key,
-    title: t.slice(0, 200),
-    kind: kind === "movie" ? "movie" : "series",
-    genres: [kind === "movie" ? "peliculas" : "series"],
-    poster: poster || undefined,
-    year: /^\d{4}$/.test(String(year || "")) ? Number(year) : undefined,
-  };
-}
-
-const A = (base, u) => { u = decodeEntities(u); return u.startsWith("//") ? "https:" + u : u.charAt(0) === "/" ? base + u : u; };
-const LANG_NAME = ["Latino", "Castellano", "Coreano", "Subtitulado"];
-function langRank(s) {
-  s = String(s || "").toLowerCase();
-  if (/latino|lat\b/.test(s)) return 0;
-  if (/castellano|espa[nñ]ol|cast\b|espa/.test(s)) return 1;
-  if (/coreano|korean|\bkor\b|\bkr\b/.test(s)) return 2;
-  return 3;
-}
-const jsonStr = (s) => { try { return JSON.parse('"' + s + '"'); } catch (e) { return String(s || ""); } };
-const posterUrl = (p) => { p = String(p || ""); return p.startsWith("//") ? "https:" + p : /^https?:\/\//i.test(p) ? p : undefined; };
-
-
-// ====================================================================================================
-//  TUDORAMA (tudorama.com): WordPress con el tema WStream. Listas en tarjetas "ipst", series en /serie/<slug>/,
-//  películas en /pelicula/<slug>/, capítulos en /ver/<slug>-s<T>x<N>/. Los servidores se piden con
-//  admin-ajax.php (acción corvus_get_servers) usando el id y el nonce que trae la propia página.
-// ====================================================================================================
-const TD = "https://tudorama.com";
-const TD_AJAX = TD + "/wp-admin/admin-ajax.php";
-const LANG_BY_CODE = { es: 0, lat: 0, en: 2, sub: 2 }; // "es" = Servidores Español Latino, "en" = Subtitulado (coreano con subtítulos)
-
-async function tdGet(path) {
-  return getText(path.startsWith("http") ? path : TD + path, { "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "Accept-Language": "es-ES,es;q=0.9", Referer: TD + "/" });
-}
-
-async function tdPost(fields, referer) {
-  let r;
-  try {
-    r = await kino.fetch(TD_AJAX, { method: "POST", headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", "X-Requested-With": "XMLHttpRequest", Origin: TD, Referer: referer || TD + "/" }, body: { form: fields }, timeoutMs: 9000 });
-  } catch (e) {
-    throw kino.error("unavailable", "tudorama ajax falló", { userMessage: tr("No se pudo abrir el sitio. Prueba de nuevo en un momento.", "Could not open the site. Try again in a moment.") });
-  }
-  if (!r.ok) throw kino.error("unavailable", "tudorama ajax " + r.status);
-  const t = await r.text();
-  try { return JSON.parse(t); } catch (e) {
-    log("td: respuesta ajax no válida inicio=" + redact(String(t).slice(0, 100)));
-    throw kino.error("unavailable", "respuesta no válida");
-  }
-}
-
-// Tarjetas de lista: <article class="ipst"> ... /serie/<slug>/ o /pelicula/<slug>/
-function tdCards(html, force) {
+// ── Fichas del HTML ───────────────────────────────────────────────────────────
+// Cada aparición de una ficha es una tarjeta: portada y título se buscan en la ventana que llega
+// hasta la aparición siguiente, así que el orden del HTML no importa.
+function cards(html) {
   const out = [];
-  const seen = new Set();
-  const re = /<article[^>]*class="[^"]*\bipst\b[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
-  let m;
-  while ((m = re.exec(String(html || "")))) {
-    const b = m[1];
-    const h = /href="https?:\/\/(?:www\.)?tudorama\.com\/(serie|pelicula)\/([^"\/?#]+)\/?"/i.exec(b);
-    if (!h) continue;
-    const kind = h[1].toLowerCase() === "pelicula" ? "movie" : "series";
-    if (force && force !== kind) continue;
-    if (seen.has(kind + h[2])) continue;
-    seen.add(kind + h[2]);
-    const title = stripTags((/ipst__title[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i.exec(b) || [])[1]) || attr((/<img\b[^>]*>/i.exec(b) || [""])[0], "alt");
-    const img = /<img\b[^>]*\bsrc="([^"]+)"/i.exec(b);
-    const it = mkItem("td", kind, h[2], title, img && posterUrl(decodeEntities(img[1])), null);
-    if (it) out.push(it);
+  let links = [];
+  let match;
+  LINK.lastIndex = 0;
+  while ((match = LINK.exec(html))) links.push({ type: match[1].toLowerCase(), full: match[2], end: match.index + match[0].length });
+  if (!links.length) {
+    BARE.lastIndex = 0;
+    while ((match = BARE.exec(html))) links.push({ type: match[1].toLowerCase(), full: match[2], end: match.index + match[0].length });
+  }
+  links = links.map((link, i) => ({ ...link, i })).sort((a, b) => a.end - b.end || a.i - b.i);
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    const path = link.full.split("/")[0];
+    const numbered = /(\d+)$/.exec(path);
+    if (!numbered) continue;
+    const stop = i + 1 < links.length ? links[i + 1].end : link.end + 2000;
+    const window = html.slice(link.end, Math.min(stop, link.end + 2000));
+    const wide = html.slice(link.end, Math.min(html.length, link.end + 2600));
+    const image = /<img([^>]*)>/i.exec(window);
+    let poster = image ? https(attr(image[1], "data-src")) || https(attr(image[1], "src")) : undefined;
+    if (!poster) {
+      const background = /url\((['"]?)(https?:\/\/[^)'"]+)\1\)/i.exec(window);
+      if (background) poster = https(background[2]);
+    }
+    let title = image ? decode(attr(image[1], "alt")) : "";
+    if (!title) {
+      const caption = /<figcaption[^>]*>([\s\S]*?)<\/figcaption>/i.exec(wide);
+      if (caption) title = text(caption[1]);
+    }
+    if (!title) {
+      const twin = new RegExp('(?:href|data-href)="[^"]*' + escapeRegExp(path) + '"[^>]*>([\\s\\S]{1,200}?)<\\/a>', "i").exec(wide);
+      if (twin) title = text(twin[1]);
+    }
+    title = title.replace(/\s+/g, " ").trim().slice(0, 200);
+    if (!title) continue;
+    const id = (AS_SERIES.has(link.type) ? "s" : "m") + numbered[1];
+    out.push({
+      id,
+      ref: numbered[1] + "|/" + link.type + "/" + path,
+      title,
+      kind: AS_SERIES.has(link.type) ? "series" : "movie",
+      poster,
+    });
   }
   return out;
 }
 
-const TD_SECTIONS = {
-  latino: { path: "/genero/espanol-latino/", genre: "series", title: ["Español Latino", "Latino"] },
-  emision: { path: "/genero/emision/", genre: "series", title: ["En emisión", "Airing now"] },
-  kdramas: { path: "/genero/series/", genre: "series", title: ["K-Dramas", "K-Dramas"] },
-  cdramas: { path: "/genero/cdrama/", genre: "series", title: ["C-Dramas", "C-Dramas"] },
-  jdramas: { path: "/genero/jdrama/", genre: "series", title: ["J-Dramas", "J-Dramas"] },
-  reality: { path: "/genero/reality-show/", genre: "series", title: ["Reality shows", "Reality shows"] },
-  subespanol: { path: "/genero/sub-espanol/", genre: "series", title: ["Sub Español", "Spanish subs"] },
-  peliculas: { path: "/genero/peliculas/", genre: "peliculas", title: ["Películas", "Movies"] },
-};
-const TD_ORDER = ["latino", "emision", "kdramas", "cdramas", "jdramas", "peliculas", "reality", "subespanol"];
-
-async function tdSection(id, n) {
-  const def = TD_SECTIONS[id];
-  if (!def) throw kino.error("not_found", "catálogo desconocido");
-  const html = await tdGet(def.path + (n > 1 ? "page/" + n + "/" : ""));
-  const items = tdCards(html);
-  if (!items.length) {
-    if (n > 1) return { items: [], hasNext: false };
-    throw kino.error("unavailable", "td sin tarjetas en " + id);
+function collect(html) {
+  const items = [];
+  const seen = new Set();
+  for (const card of cards(html)) {
+    if (seen.has(card.id)) continue;
+    seen.add(card.id);
+    items.push(card);
+    if (items.length >= 30) break;
   }
-  const hasNext = new RegExp("/page/" + (n + 1) + "/").test(html) || items.length >= 20;
-  return { items, hasNext };
+  return items;
 }
 
+function sections(html) {
+  const marks = [];
+  const re = /<h2\b[^>]*>/gi;
+  let match;
+  while ((match = re.exec(html))) marks.push(match.index + match[0].length);
+  const out = [];
+  for (let i = 0; i < marks.length; i++) {
+    const from = marks[i];
+    const to = i + 1 < marks.length ? marks[i + 1] : html.length;
+    out.push({ head: text(html.slice(from, Math.min(to, from + 300))), body: html.slice(from, to) });
+  }
+  return out;
+}
+
+// Abre la ficha en la pantalla del plugin, así Atrás vuelve al Home.
+function opens(items) {
+  for (const item of items) item.open = { screen: { args: { ref: item.ref } } };
+  return items;
+}
+
+const ROWS = [
+  { id: "estrenos", title: "Últimos estrenos", titleEn: "Latest releases", keys: ["ultimos estrenos"], genre: "otros" },
+  { id: "populares", title: "Populares del día", titleEn: "Popular today", keys: ["populares"], genre: "otros" },
+  { id: "agregados", title: "Últimos títulos agregados", titleEn: "Recently added", keys: ["ultimos titulos"], genre: "otros" },
+  { id: "episodios", title: "Últimos episodios", titleEn: "Latest episodes", keys: ["ultimos episodios"], genre: "series" },
+];
+
+async function page(path) {
+  const answer = await kino.fetch(BASE + path, { headers: HEADERS });
+  if (!answer.ok) throw kino.error("unavailable", path + " " + answer.status);
+  return await body(answer);
+}
+
+function rowsOf(html, prefix, wanted, genre) {
+  const found = sections(html);
+  const out = [];
+  for (const row of wanted) {
+    const section = found.find((one) => row.keys.some((key) => one.head.includes(key)));
+    if (!section) continue;
+    const items = opens(collect(section.body));
+    if (items.length) out.push({ id: prefix + row.id, title: row.prefix + " · " + t(row.title, row.titleEn), genre: genre || row.genre, items });
+  }
+  return out;
+}
+
+const SECTION_ROWS = [
+  { id: "mes", title: "Populares del mes", titleEn: "Popular this month", keys: ["populares del mes"] },
+  { id: "estrenos", title: "Últimos estrenos", titleEn: "Latest releases", keys: ["ultimos estrenos"] },
+  { id: "agregados", title: "Últimos agregados", titleEn: "Recently added", keys: ["ultimos titulos"] },
+  { id: "dia", title: "Populares del día", titleEn: "Popular today", keys: ["populares del dia"] },
+];
+
 export async function home() {
-  await null;
-  const res = await Promise.allSettled(TD_ORDER.map((id) => withTimeout(tdSection(id, 1), 12000)));
+  const [inicio, pelis, series] = await Promise.allSettled([page("/"), page("/movies/"), page("/series/")]);
+  if (inicio.status !== "fulfilled") throw inicio.reason;
+  const html = inicio.value;
+  const found = sections(html);
   const rows = [];
-  res.forEach((r, i) => {
-    const id = TD_ORDER[i];
-    if (r.status !== "fulfilled") { log("home: falló " + id + " " + String((r.reason && r.reason.message) || r.reason).slice(0, 60)); return; }
-    const items = r.value.items.slice(0, HOME_ROW);
-    if (items.length) rows.push({ id: "row-" + id, title: tr(TD_SECTIONS[id].title[0], TD_SECTIONS[id].title[1]), genre: TD_SECTIONS[id].genre, ref: id, items });
-  });
-  log("home filas=" + rows.length);
-  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
+  for (const row of ROWS) {
+    const section = found.find((one) => row.keys.some((key) => one.head.includes(key)));
+    if (!section) continue;
+    const items = opens(collect(section.body));
+    if (items.length) rows.push({ id: row.id, title: t(row.title, row.titleEn), genre: row.genre, items });
+  }
+  if (pelis.status === "fulfilled") {
+    for (const r of rowsOf(pelis.value, "m-", SECTION_ROWS.map((x) => ({ ...x, prefix: t("Películas", "Movies") })), "peliculas")) rows.push(r);
+  } else log("home: /movies/ falló");
+  if (series.status === "fulfilled") {
+    for (const r of rowsOf(series.value, "s-", SECTION_ROWS.map((x) => ({ ...x, prefix: t("Series", "Series") })), "series")) rows.push(r);
+  } else log("home: /series/ falló");
+  if (!rows.length) {
+    const items = opens(collect(html));
+    if (items.length) rows.push({ id: "todo", title: "Kimera", genre: "otros", items });
+  }
+  if (!rows.length) throw kino.error("unavailable", "home vacío len=" + html.length);
+  log("home: filas=" + rows.length);
   return rows;
 }
 
-export async function categories() {
-  await null;
-  return TD_ORDER.map((id) => ({ id, title: tr(TD_SECTIONS[id].title[0], TD_SECTIONS[id].title[1]), ref: id }));
+// ── Catálogo ─────────────────────────────────────────────────────────────────
+// /catalog?q=&type=&tag=&sort=&page= trae las fichas dentro del JSON "catalog-initial-data".
+function catalogItems(html) {
+  const data = json(html, "catalog-initial-data");
+  const out = [];
+  if (data && Array.isArray(data.items)) {
+    for (const it of data.items) {
+      const url = String(it.title_url || "");
+      const m = /^\/([a-z]+)\/[^\/]+-(\d+)$/.exec(url);
+      if (!m) continue;
+      const series = AS_SERIES.has(m[1]);
+      out.push({
+        id: (series ? "s" : "m") + m[2],
+        ref: m[2] + "|" + url,
+        title: decode(it.name).slice(0, 200),
+        kind: series ? "series" : "movie",
+        poster: https(it.vertical_cover_url) || https(it.cover_url),
+      });
+    }
+    return { items: out, hasNext: !!data.has_next, pages: Number(data.pages) || 1 };
+  }
+  return { items: collect(html), hasNext: false, pages: 1 };
 }
 
-export async function browse(ref, cursor) {
-  await null;
-  const id = String(ref || "");
-  if (!TD_SECTIONS[id]) throw kino.error("not_found", "catálogo desconocido");
-  const n = Math.max(1, parseInt(cursor, 10) || 1);
-  const items = [];
-  const seen = new Set();
-  let p = n;
-  let hasNext = true;
-  let tries = 0;
-  while (hasNext && items.length < PAGE_VIEW && tries < 3) {
-    tries++;
-    let page;
-    try { page = await tdSection(id, p); } catch (e) { if (p === n) throw e; break; }
-    for (const x of page.items) if (!seen.has(x.id)) { seen.add(x.id); items.push(x); }
-    hasNext = page.hasNext;
-    p++;
-  }
-  const out = { items: items.slice(0, MAX_RESULTS) };
-  if (hasNext && items.length) out.next = String(p);
-  return out;
+async function catalog(params, pageNo) {
+  const q = Object.keys(params).filter((k) => params[k] !== "" && params[k] != null).map((k) => k + "=" + encodeURIComponent(params[k]));
+  q.push("page=" + pageNo);
+  return catalogItems(await page("/catalog?" + q.join("&")));
 }
 
 export async function search(query) {
-  await null;
-  const q = stripTags(query && query.q).slice(0, 100);
+  const q = String(query || "").trim();
   if (!q) return [];
-  const html = await tdGet("/?s=" + enc(q));
-  const out = tdCards(html).slice(0, MAX_RESULTS);
-  log("búsqueda: " + out.length + " resultados");
+  const first = await catalog({ q }, 1);
+  let items = first.items.slice();
+  if (first.pages > 1) {
+    const more = [];
+    for (let p = 2; p <= Math.min(first.pages, 4); p++) more.push(catalog({ q }, p).catch(() => ({ items: [] })));
+    for (const r of await Promise.all(more)) items = items.concat(r.items);
+  }
+  const seen = new Set();
+  items = items.filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+  log("búsqueda '" + q + "': " + items.length);
+  return items;
+}
+
+const BROWSE = {
+  peliculas: { title: "Películas", titleEn: "Movies", params: { type: "movie" }, genre: "peliculas" },
+  series: { title: "Series", titleEn: "Series", params: { type: "serie" }, genre: "series" },
+  animes: { title: "Animes", titleEn: "Anime", params: { type: "anime" }, genre: "anime" },
+  dramas: { title: "Dramas", titleEn: "Dramas", params: { type: "drama" }, genre: "doramas" },
+  donghuas: { title: "Donghuas", titleEn: "Donghua", params: { type: "donghua" }, genre: "otros" },
+  agregados: { title: "Últimos agregados", titleEn: "Recently added", params: { sort: "added" }, genre: "otros" },
+  accion: { title: "Acción", titleEn: "Action", params: { tag: 2 }, genre: "accion" },
+  aventura: { title: "Aventura", titleEn: "Adventure", params: { tag: 4 }, genre: "aventura" },
+  comedia: { title: "Comedia", titleEn: "Comedy", params: { tag: 1 }, genre: "comedia" },
+  drama: { title: "Drama", titleEn: "Drama", params: { tag: 11 }, genre: "drama" },
+  terror: { title: "Terror", titleEn: "Horror", params: { tag: 21 }, genre: "terror" },
+  ciencia: { title: "Ciencia ficción", titleEn: "Sci-fi", params: { tag: 14 }, genre: "ciencia-ficcion" },
+  animacion: { title: "Animación", titleEn: "Animation", params: { tag: 17 }, genre: "infantil" },
+  romance: { title: "Romance", titleEn: "Romance", params: { tag: 3 }, genre: "romance" },
+  suspenso: { title: "Suspenso", titleEn: "Thriller", params: { tag: 18 }, genre: "suspenso" },
+  crimen: { title: "Crimen", titleEn: "Crime", params: { tag: 15 }, genre: "otros" },
+  fantasia: { title: "Fantasía", titleEn: "Fantasy", params: { tag: 5 }, genre: "otros" },
+  familia: { title: "Familia", titleEn: "Family", params: { tag: 13 }, genre: "infantil" },
+};
+
+export async function browse(ref, cursor) {
+  const def = BROWSE[String(ref || "")];
+  if (!def) throw kino.error("not_found", "sección desconocida");
+  const n = Math.max(1, parseInt(cursor, 10) || 1);
+  const r = await catalog(def.params, n);
+  const out = { items: r.items };
+  if (r.hasNext && r.items.length) out.next = String(n + 1);
   return out;
 }
 
-// ---- Capítulos ----------------------------------------------------------------------------------
-const epCache = new Map();
-
-function tdEpPush(map, season, number, o) {
-  const k = season + "x" + number;
-  const cur = map.get(k);
-  if (cur) { if (!cur.title && o.title) cur.title = o.title; if (!cur.poster && o.poster) cur.poster = o.poster; return; }
-  map.set(k, { season, number, ref: "td|e|" + o.slug, title: o.title || "", poster: o.poster });
+export async function categories() {
+  return Object.keys(BROWSE).map((id) => ({ id, title: t(BROWSE[id].title, BROWSE[id].titleEn), ref: id }));
 }
 
-async function tdSeriesEpisodes(slug) {
-  const html = await tdGet("/serie/" + slug + "/");
-  const eps = new Map();
-  // 1) los que ya vienen en la página (<li class="lep" data-episode data-season>)
-  for (const m of html.matchAll(/<li\b[^>]*class="[^"]*\blep\b[^"]*"[^>]*>([\s\S]*?)<\/li>/gi)) {
-    const tag = m[0].slice(0, m[0].indexOf(">") + 1);
-    const n = parseInt(attr(tag, "data-episode"), 10);
-    const s = parseInt(attr(tag, "data-season"), 10);
-    const link = /href="https?:\/\/[^"\/]+\/ver\/([^"\/?#]+)\/?"/i.exec(m[1]);
-    if (!link || !n || !s) continue;
-    const t = stripTags((/lep__title[^>]*>([\s\S]*?)<\//i.exec(m[1]) || [])[1]);
-    const img = /<img\b[^>]*\bsrc="([^"]+)"/i.exec(m[1]);
-    tdEpPush(eps, s, n, { slug: link[1], title: t, poster: img && posterUrl(decodeEntities(img[1])) });
-  }
-  // 2) cualquier enlace /ver/<serie>-s<T>x<N>/
-  for (const m of html.matchAll(/href="https?:\/\/[^"\/]+\/ver\/([a-z0-9._-]+?)-s(\d+)x(\d+)\/?"/gi)) tdEpPush(eps, +m[2], +m[3], { slug: m[1] + "-s" + m[2] + "x" + m[3] });
-  // 3) las demás temporadas y páginas, con la misma llamada AJAX que usa la página (corvus_get_episodes)
-  const box = (/<[^>]*class="[^"]*\beps\b(?![-_])[^"]*"[^>]*>/i.exec(html) || [""])[0];
-  const nonce = attr(box, "data-nonce");
-  const tmdb = attr(box, "data-tmdb-id");
-  const results = attr(box, "data-results") || "20";
-  const order = attr(box, "data-order") || "asc";
-  const seasons = new Map();
-  for (const m of html.matchAll(/<button\b[^>]*data-season="(\d+)"[^>]*>/gi)) seasons.set(+m[1], attr(m[0], "data-series-id") || tmdb);
-  if (!seasons.size && attr(box, "data-season-number")) seasons.set(+attr(box, "data-season-number"), tmdb);
-  if (nonce && seasons.size) {
-    const fetchSeason = async ([sn, sid]) => {
-      let offset = 0;
-      for (let page = 0; page < 12; page++) {
-        const j = await withTimeout(tdPost({ action: "corvus_get_episodes", nonce, post_id: sid || tmdb, season: String(sn), results, offset: String(offset), order }, TD + "/serie/" + slug + "/"), 8000);
-        const list = j && j.success && j.data && Array.isArray(j.data.results) ? j.data.results : [];
-        for (const e of list) {
-          const link = /\/ver\/([^"\/?#]+)\/?/i.exec(String(e.permalink || ""));
-          const s = +e.season_number || sn;
-          const n = +e.episode_number;
-          if (!link || !n) continue;
-          tdEpPush(eps, s, n, { slug: link[1], title: stripTags(e.title), poster: posterUrl(e.episode_image) });
-        }
-        if (!(j && j.success && j.data && j.data.hasMore) || !list.length) break;
-        offset += Number(results) || list.length;
+// ── Episodios ────────────────────────────────────────────────────────────────
+async function seriesInfo(id, path) {
+  const info = { title: "", poster: undefined };
+  try {
+    const answer = await kino.fetch(BASE + path, { headers: HEADERS });
+    if (answer.ok) {
+      const data = json(await body(answer), "title-data");
+      if (data) {
+        info.title = decode(data.name).slice(0, 200);
+        info.poster = https(data.cover_url);
       }
-    };
-    const rs = await Promise.allSettled([...seasons].slice(0, 20).map(fetchSeason));
-    rs.forEach((r) => { if (r.status === "rejected") log("td: temporada falló " + String((r.reason && r.reason.message) || r.reason).slice(0, 60)); });
+    }
+  } catch (error) {
+    log("ficha de serie", id, error.message);
   }
-  const out = [...eps.values()].sort((a, b) => (a.season - b.season) || (a.number - b.number)).map((e) => ({ season: e.season, number: e.number, ref: e.ref, title: e.title || tr("Episodio ", "Episode ") + e.number, poster: e.poster }));
-  const title = stripTags((/<h1[^>]*class="[^"]*hero__title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i.exec(html) || [])[1]) || "";
-  log("td: episodios " + slug + " = " + out.length + " (temporadas=" + seasons.size + ", ajax=" + (nonce ? "sí" : "no") + ")");
-  if (!out.length) throw kino.error("not_found", "td sin capítulos", { userMessage: tr("Esta serie aún no tiene capítulos.", "This series has no episodes yet.") });
-  return { series: { title: title.slice(0, 200) }, episodes: out };
+  if (!info.title) info.title = "Serie " + id;
+  return info;
 }
 
 export async function episodes(ref) {
-  await null;
-  const p = String(ref || "").split("|");
-  if (p[0] !== "td") throw kino.error("not_found", "referencia desconocida");
-  if (p[1] === "m") return { series: { title: "" }, episodes: [{ season: 1, number: 1, ref: String(ref), title: tr("Película", "Movie") }] };
-  const hit = epCache.get(p[2]);
-  if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.value;
-  const value = await withTimeout(tdSeriesEpisodes(p[2]), 18000);
-  epCache.set(p[2], { t: Date.now(), value });
-  return value;
-}
-
-// ---- Servidores de un capítulo o película --------------------------------------------------------
-async function tdCandidates(spec) {
-  const p = spec.split("|"); // e|<slug-del-capítulo>  o  m|<slug>
-  const page = TD + (p[0] === "e" ? "/ver/" : "/pelicula/") + p[1] + "/";
-  const html = await tdGet(page);
-  const box = (/<[^>]*class="[^"]*\b(?:ep__dropdown|servers)\b[^"]*"[^>]*data-id=[^>]*>/i.exec(html) || /<[^>]*data-id="\d+"[^>]*data-nonce="[^"]+"[^>]*>/i.exec(html) || [""])[0];
-  const id = attr(box, "data-id");
-  const nonce = attr(box, "data-nonce");
-  if (!id || !nonce) throw kino.error("not_found", "td sin id de servidores", { userMessage: tr("Este capítulo aún no tiene servidores.", "No servers for this episode yet.") });
-  const j = await tdPost({ action: "corvus_get_servers", nonce, post_id: id }, page);
-  const list = Array.isArray(j) ? j : (j && Array.isArray(j.data) ? j.data : []);
-  const cands = [];
-  for (const s of list) {
-    const u = A(TD, String(s.link || s.url || "").trim());
-    if (!/^https?:\/\//i.test(u)) continue;
-    const code = String(s.lang || "").toLowerCase();
-    const nm = String(s.name || "");
-    let lang = LANG_BY_CODE[code] !== undefined ? LANG_BY_CODE[code] : langRank(nm);
-    if (LANG_BY_CODE[code] === undefined && lang === 3 && /sub/i.test(nm)) lang = 2;
-    const [server, extra] = nm.split(":");
-    cands.push({ url: u, lang, label: "TuDorama · " + (server || hostOf(u)).trim() + (extra ? " · " + extra.trim() : "") + " · " + (lang === 0 ? "Latino" : lang === 1 ? "Castellano" : lang === 2 ? "Sub Español" : "Otro"), referer: page, type: String(s.type || "embed") });
-  }
-  log("td: " + p[0] + "/" + p[1].slice(0, 40) + " servidores=" + cands.length + " " + cands.map((c) => hostOf(c.url) + ":" + c.lang).join(","));
-  if (!cands.length) throw kino.error("not_found", "td sin servidores", { userMessage: tr("Este capítulo aún no tiene servidores.", "No servers for this episode yet.") });
-  return cands;
-}
-
-// ---- Reproducción -------------------------------------------------------------------------------
-const HOST_RANK = [/goodstream/i, /vimeos|unlimplay/i, /fastream|ok\.ru/i, /mp4upload/i, /streamwish|hgcloud|vidhide|dhcplay|hlswish|iplayerhls/i, /lulu/i, /voe|uqload|streamtape|streamlare|vidoza|supervideo|vidmoly/i, /paulinito|keki|tnmr/i, /filemoon|byse|mixdrop|mdy|netu|waaw|mega/i];
-const rank = (u) => { const h = hostOf(u); const i = HOST_RANK.findIndex((r) => r.test(h)); return i < 0 ? 5 : i; };
-
-async function candidatesOf(src, spec) {
-  if (src === "td") return tdCandidates(spec);
-  throw kino.error("not_found", "referencia desconocida");
-}
-
-async function sleepUpTo(ms) {
-  let left = ms;
-  while (left > 0) { const t = Math.min(left, 4500); await kino.sleep(t); left -= t; }
-  return null;
-}
-function withTimeout(p, ms) {
-  if (typeof kino.sleep !== "function") return p;
-  const stop = sleepUpTo(ms).then(() => { throw new Error("tardó demasiado"); });
-  stop.catch(() => {});
-  return Promise.race([Promise.resolve(p), stop]);
-}
-
-const isDirect = (c) => /\.(m3u8|mp4)(\?|$)/i.test(c.url) && !isDemo(c.url);
-const asDirect = (c) => ({ url: c.url, mime: /\.m3u8/i.test(c.url) ? "application/x-mpegurl" : "video/mp4", label: c.label, headers: playHeaders(c.referer || REF) });
-
-async function verifyMedia(m) {
-  if (!/mpegurl/i.test(String(m && m.mime))) return true;
-  try {
-    const r = await withTimeout(kino.fetch(m.url, { headers: m.headers || {} }), 4500);
-    if (!r.ok) return false;
-    const t = await r.text();
-    return /#EXTM3U/.test(String(t).slice(0, 400));
-  } catch (e) { return false; }
-}
-
-async function directWorks(c) {
-  const org = (/^(https?:\/\/[^\/?#]+)/i.exec(c.url) || [])[1] || "";
-  const refs = [c.referer || REF, "https://lulustream.com/", "https://luluvdo.com/", org + "/"].filter((x, i, a) => x && a.indexOf(x) === i);
-  const tries = refs.map((r) => {
-    const m = { url: c.url, mime: /\.m3u8/i.test(c.url) ? "application/x-mpegurl" : "video/mp4", label: c.label, headers: playHeaders(r) };
-    return verifyMedia(m).then((ok) => (ok ? { m, r } : null), () => null);
-  });
-  const res = await Promise.all(tries);
-  const hit = res.find(Boolean);
-  if (hit) log("resolve: directo abre con referer " + hostOf(hit.r));
-  return hit ? hit.m : null;
-}
-export async function resolve(ref) {
-  await null;
-  const t0 = Date.now();
-  const raw = String(ref || "");
-  const refs = (raw.startsWith("mx|") ? raw.slice(3) : raw).split("||").filter((x) => x && x.indexOf("tt:") !== 0).slice(0, 8);
-  if (!refs.length) throw kino.error("not_found", "referencia desconocida");
-  const total = 20000;
-  const left = () => total - (Date.now() - t0);
-
-  // 1) servidores de todas las fuentes, a la vez
-  const got = await Promise.allSettled(refs.map((r) => withTimeout(candidatesOf(r.slice(0, 2), r.slice(3)), 8000)));
-  let cands = [];
-  let lastErr = null;
-  got.forEach((g, i) => {
-    if (g.status === "fulfilled") cands = cands.concat(g.value);
-    else { lastErr = g.reason; log("resolve: " + refs[i].slice(0, 2) + " sin servidores (" + String((g.reason && g.reason.message) || g.reason).slice(0, 40) + ")"); }
-  });
-  const backupP = null;
-  cands = cands.filter((c, i) => cands.findIndex((x) => x.url === c.url) === i);
-  if (SOLO_LATINO) {
-    const lat = cands.filter((c) => (c.lang || 0) === 0);
-    log("resolve: filtro Latino " + lat.length + " de " + cands.length);
-    if (!lat.length) throw kino.error("not_found", "sin audio latino", { userMessage: tr("Este capítulo no tiene audio Latino.", "No Latino audio for this episode.") });
-    cands = lat;
-  }
-  const useless = (c) => /dood|pinup|agl00\d\.com|playmogo|doodstream|mixdrop|susanexpect|nupload|netu|waaw|hqq/i.test(hostOf(c.url));
-  const usable = cands.filter((c) => !useless(c));
-  if (usable.length) cands = usable;
-  cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
-  log("resolve: " + cands.length + " servidores de " + refs.length + " fuentes: " + cands.slice(0, 8).map((c) => hostOf(c.url).replace(/^www\./, "")).join(","));
-
-  // 2) enlaces directos del mejor idioma
-  const minLang = cands.length ? Math.min(...cands.map((c) => c.lang || 0)) : 0;
-  const bd = cands.find((c) => isDirect(c) && (c.lang || 0) === minLang);
-  if (bd) {
-    // Un enlace directo no vale si el servidor lo rechaza (403): se prueba con las cabeceras de su reproductor y, si no abre, se sigue con los demás.
-    const ok = await directWorks(bd);
-    if (ok) { log("resolve: ganó (directo) " + hostOf(bd.url) + " · " + (bd.label || "")); return ok; }
-    log("resolve: el enlace directo de " + hostOf(bd.url) + " no abre, sigo con los demás servidores");
-  }
-
-  // 3) reproductores: de 4 en 4 sin soltar los anteriores; gana el primero que entregue video que abra.
-  const embeds = cands.filter((c) => !isDirect(c) && !c.cap);
-  const allEmbeds = embeds.slice();
-  const capCands = cands.filter((c) => c.cap);
-  const BAD = /dood|playmogo|mixdrop|susanexpect|waaw|hqq|netu|nupload/i;
-  const browserOk = typeof kino.browser === "object" && kino.browser && typeof kino.browser.capture === "function";
-  let winner = null;
-  let fallback = null;
-  let pending = 0;
-  let captureStarted = false;
-  const pendLang = new Map();
-  const accept = async (v, c) => {
-    v.label = c.label;
-    const l = c.lang || 0;
-    if (await verifyMedia(v)) { if (!winner || l < winner.l) { winner = { v, l }; log("resolve: ganó " + hostOf(c.url) + " · " + (c.label || "")); } }
-    else { log("resolve: el video de " + hostOf(c.url) + " no abre, se descarta"); if (!fallback && !BAD.test(hostOf(c.url))) fallback = v; }
-  };
-  const start = (c) => {
-    pending++;
-    pendLang.set(c, c.lang || 0);
-    embedFromHtml(c.url, 0, c.referer || REF).then((v) => (v ? accept(v, c) : null))
-      .catch((e) => log("resolve: " + hostOf(c.url) + " falló " + String((e && e.message) || e).slice(0, 40)))
-      .then(() => { pending--; pendLang.delete(c); });
-  };
-  const startCapture = () => {
-    if (captureStarted || !browserOk || winner) return;
-    const fe = capCands[0] || allEmbeds.find((c) => !BAD.test(hostOf(c.url))) || allEmbeds[0];
-    if (!fe || left() < 5000) return;
-    captureStarted = true;
-    pending++;
-    log("resolve: sin video aún, el navegador oculto arranca en paralelo (" + hostOf(fe.page || fe.url) + ")");
-    captureEmbed(fe.page || fe.url, Math.min(14000, left() - 1500), fe.referer)
-      .then((s) => (s ? accept(s, fe) : log("resolve: el navegador no vio video")))
-      .catch((e) => log("resolve: captura falló " + String((e && e.message) || e).slice(0, 60)))
-      .then(() => { pending--; });
-  };
-  const waitFor = async (ms) => {
-    const end = Date.now() + ms;
-    while (Date.now() < end && pending > 0) {
-      if (winner && !Array.from(pendLang.values()).some((l) => l < winner.l)) return;
-      await kino.sleep(200);
-    }
-  };
-  let backupDone = !backupP;
-  const mergeBackup = async (ms) => {
-    if (backupDone || ms < 300) return;
-    let extra;
-    try { extra = await withTimeout(backupP, ms); } catch (e) { return; }
-    backupDone = true;
-    const fresh = (extra || []).filter((c) => !useless(c) && !cands.some((x) => x.url === c.url) && (!SOLO_LATINO || (c.lang || 0) === 0));
-    fresh.sort((x, y) => ((x.lang || 0) * 10 + rank(x.url)) - ((y.lang || 0) * 10 + rank(y.url)));
-    log("resolve: respaldo aporta " + fresh.length + " servidores");
-    for (const c of fresh) {
-      if (c.cap) continue;
-      cands.push(c);
-      if (!isDirect(c)) { embeds.push(c); allEmbeds.push(c); continue; }
-      if (!winner && left() > 3000) {
-        const ok = await directWorks(c);
-        if (ok) { winner = { v: ok, l: c.lang || 0 }; log("resolve: ganó (respaldo directo) " + hostOf(c.url) + " · " + (c.label || "")); }
+  const [id, path] = splitRef(ref);
+  if (!id) throw kino.error("not_found", "ref " + ref);
+  const series = await seriesInfo(id, path);
+  const episodes = [];
+  for (let page = 1; page <= 20; page++) {
+    const answer = await kino.fetch(BASE + "/api/titles/" + encodeURIComponent(id) + "/content?sort=asc&page=" + page, { headers: HEADERS });
+    if (!answer.ok) break;
+    const data = JSON.parse(await body(answer));
+    for (const season of data.seasons || []) {
+      const number = Number(season.number) || 1;
+      for (const item of season.items || []) {
+        const episode = Number(item.number);
+        if (!episode || !item.url) continue;
+        episodes.push({
+          season: number,
+          number: episode,
+          ref: id + "|" + item.url,
+          title: decode(item.name).slice(0, 200) || "Episodio " + episode,
+          poster: item.thumbnail_url || series.poster,
+        });
       }
     }
-  };
-  const rounds = async () => {
-    while (embeds.length && left() > 4500 && !winner) {
-      embeds.splice(0, 4).forEach(start);
-      await waitFor(Math.min(3500, left() - 3500));
-      if (!winner) await mergeBackup(Math.min(2500, left() - 3500));
-      if (!winner && !embeds.length) startCapture();
-    }
-  };
-  await rounds();
-  if (!winner) { await mergeBackup(Math.min(4000, left() - 3000)); await rounds(); }
-  if (!winner) startCapture();
-  if (!winner && pending > 0 && left() > 1500) await waitFor(Math.max(1500, left() - 2500));
-  if (winner) {
-    if (Array.from(pendLang.values()).some((l) => l < winner.l)) await waitFor(1500);
-    return winner.v;
+    if (!data.has_next) break;
   }
-  const ld = cands.find(isDirect);
-  if (ld) return asDirect(ld);
-  if (fallback) return fallback;
-  throw lastErr && lastErr.code ? lastErr : kino.error("unavailable", "ningún servidor entregó el video", {
-    userMessage: tr("Ningún servidor de este título se pudo abrir desde aquí. Prueba otro título.", "No server for this title could be opened from here. Try another title."),
+  if (!episodes.length) throw kino.error("not_found", "sin episodios");
+  return { series, episodes };
+}
+
+async function firstEpisode(id) {
+  const answer = await kino.fetch(BASE + "/api/titles/" + encodeURIComponent(id) + "/content?sort=asc&page=1", { headers: HEADERS });
+  if (!answer.ok) return null;
+  const data = JSON.parse(await body(answer));
+  for (const season of data.seasons || []) {
+    const items = season.items || [];
+    if (items.length) return items[0].url || null;
+  }
+  return null;
+}
+
+// ── Reproducción ─────────────────────────────────────────────────────────────
+function absolute(text, base) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => {
+      const clean = line.trim();
+      if (!clean) return line;
+      if (clean[0] === "#") return line.replace(/URI="([^"]+)"/g, (_, u) => 'URI="' + absUrl(base, u) + '"');
+      return absUrl(base, clean);
+    })
+    .join("\n");
+}
+
+// Master HLS con el video y los idiomas cosidos. Devuelve null si el video ya trae su audio.
+async function master(videoUrl, tracks, headers) {
+  const answer = await kino.fetch(videoUrl, { headers });
+  if (!answer.ok) throw new Error("video " + answer.status);
+  const raw = await body(answer);
+  if (!/^#EXTM3U/.test(raw)) throw new Error("el video no es HLS");
+  if (/#EXT-X-MEDIA:TYPE=AUDIO/i.test(raw)) return null;
+
+  const out = ["#EXTM3U", "#EXT-X-VERSION:7"];
+  const media = [];
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    try {
+      const probe = await kino.fetch(track.url, { headers });
+      if (!probe.ok) continue;
+      if (!/^#EXTM3U/.test(await body(probe))) continue;
+      const lang = String(track.lang || "und").toLowerCase().replace(/[^a-z-]/g, "").slice(0, 8) || "und";
+      const name = String(track.label || "Audio " + (i + 1)).replace(/["\\]/g, "").slice(0, 40) || "Audio";
+      media.push(
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="ka",NAME="' + name + '",LANGUAGE="' + lang +
+        '",DEFAULT=' + (i === 0 ? "YES" : "NO") + ",AUTOSELECT=YES,URI=\"" + track.url + '"'
+      );
+    } catch (error) {
+      log("audio " + i + " descartado: " + String(error.message || error).slice(0, 60));
+    }
+  }
+  if (!media.length) throw new Error("sin audios utilizables");
+  out.push(...media);
+
+  if (/#EXT-X-STREAM-INF/i.test(raw)) {
+    for (const line of absolute(raw, videoUrl).split(/\r?\n/)) {
+      if (!line || /^#EXTM3U/.test(line)) continue;
+      out.push(/^#EXT-X-STREAM-INF/i.test(line) ? line.replace(/\s+$/, "") + ',AUDIO="ka"' : line);
+    }
+  } else {
+    out.push('#EXT-X-STREAM-INF:BANDWIDTH=4000000,AUDIO="ka"', videoUrl);
+  }
+  return out.join("\n");
+}
+
+export async function resolve(ref) {
+  await null;
+  const raw = String(ref || "");
+  const cut = raw.indexOf("#");
+  const base = cut === -1 ? raw : raw.slice(0, cut);
+  const pick = cut === -1 ? "" : raw.slice(cut + 1);
+  let [id, path] = splitRef(base);
+  if (!id || !path.startsWith("/")) throw kino.error("not_found", "ref " + raw);
+
+  // Una serie se abre por su primer episodio; un episodio ya trae su ruta de reproducción.
+  if (!path.includes("/watch")) {
+    if (/^\/movies\//.test(path)) {
+      path = path.replace(/\/+$/, "") + "/watch";
+    } else {
+      const first = await firstEpisode(id);
+      if (!first) throw kino.error("not_found", "sin episodios " + id);
+      path = first;
+    }
+  }
+
+  const headers = { Referer: BASE + "/", Origin: BASE, "User-Agent": HEADERS["User-Agent"] };
+  const answer = await kino.fetch(BASE + path, { headers: HEADERS });
+  if (answer.status === 404) throw kino.error("not_found", "watch 404");
+  if (!answer.ok) throw kino.error("unavailable", "watch " + answer.status);
+
+  const data = json(await body(answer), "content-data");
+  const all = [];
+  for (const category of (data && data.playback) || []) {
+    for (const option of category.playback_options || []) all.push({ cat: String(category.name || ""), option });
+  }
+  const wanted = pick ? parseInt(pick, 10) : -1;
+  let chosen = wanted >= 0 && all[wanted] && all[wanted].option.url ? all[wanted] : undefined;
+  if (!chosen) chosen = all.find((x) => x.option.url && x.option.ready && x.option.active) || all.find((x) => x.option.url && !x.option.failed);
+  if (!chosen) throw kino.error("not_found", "sin servidor", { userMessage: "Este título no tiene ningún servidor disponible ahora." });
+
+  const option = chosen.option;
+  const url = https(option.url);
+  if (!url) throw kino.error("unavailable", "url rara");
+
+  const alternatives = [];
+  for (let i = 0; i < all.length; i++) {
+    if (all[i] === chosen || !all[i].option.url) continue;
+    const label = (all[i].cat + " · " + (all[i].option.name || "Servidor")).slice(0, 48);
+    alternatives.push({ label, ref: id + "|" + path + "#" + i });
+    if (alternatives.length >= 8) break;
+  }
+
+  const audioTracks = [];
+  if (String(option.track_mode || "") === "separated") {
+    for (const track of option.audio_tracks || []) {
+      const trackUrl = https(track.playlist_url);
+      if (!trackUrl) continue;
+      const lang = String(track.language_code || "und").slice(0, 16);
+      const label = String(track.display_name || "").slice(0, 40);
+      audioTracks.push(label ? { lang, url: trackUrl, label } : { lang, url: trackUrl });
+      if (audioTracks.length >= 8) break;
+    }
+  }
+
+  const subtitles = [];
+  for (const track of option.subtitles || []) {
+    const trackUrl = https(track.url);
+    if (!trackUrl) continue;
+    subtitles.push({ lang: String(track.language_code || "und").slice(0, 16), url: trackUrl, format: "vtt" });
+    if (subtitles.length >= 30) break;
+  }
+
+  const stream = { mime: "application/vnd.apple.mpegurl", headers, subtitles };
+  if (alternatives.length) stream.alternatives = alternatives;
+
+  // Coser el audio: sin esto el video va mudo.
+  if (setting("mix", true) !== false && audioTracks.length) {
+    try {
+      const glued = await master(url, audioTracks, headers);
+      if (glued) {
+        log("master listo: " + glued.length + "B audios=" + audioTracks.length);
+        return { ...stream, url: "data:application/vnd.apple.mpegurl;charset=utf-8," + encodeURIComponent(glued) };
+      }
+      log("el video ya trae audio");
+    } catch (error) {
+      log("master falló (" + String(error.message || error).slice(0, 60) + "): video + audioTracks");
+      return { ...stream, url, audioTracks };
+    }
+  }
+  return { ...stream, url, audioTracks };
+}
+
+// ── Pantalla ─────────────────────────────────────────────────────────────────
+const PAGE = (appBar, children) => ({
+  type: "Scaffold",
+  appBar,
+  body: { type: "SingleChildScrollView", children: [{ type: "Column", padding: 16, gap: 16, children }] },
+});
+
+const CLOSE = { type: "IconButton", icon: "close", labelText: "Cerrar", labelTextEn: "Close", onPressed: { close: true } };
+const BACK = { type: "IconButton", icon: "arrow_back", labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "back" } };
+
+function bar(title, titleEn, leading, actions) {
+  const appBar = { type: "AppBar", title, titleEn, mergeWithKinoBar: true, dense: true, leading };
+  if (actions) appBar.actions = actions;
+  return appBar;
+}
+
+const SHARE_BUTTON = {
+  type: "IconButton", icon: "share", labelText: "Compartir", labelTextEn: "Share",
+  devices: ["phone"], onPressed: { event: "shareOpen" },
+};
+
+function shareSheet(state) {
+  const attach = state.attach !== false && state.tmdb > 0;
+  const children = [
+    { type: "Text", text: "Compartir en Kino Social", textEn: "Share to Kino Social", style: "h4" },
+    { type: "TextField", key: "shareText", multiline: true, maxLines: 4, maxLength: 500, labelText: "Texto", labelTextEn: "Text", value: state.shareText || "" },
+  ];
+  if (state.tmdb > 0) {
+    children.push({ type: "Switch", key: "shareAttach", labelText: "Adjuntar el título", labelTextEn: "Attach the title", value: attach, onChanged: "shareAttach" });
+  }
+  children.push({
+    type: "Text", style: "caption", color: "muted",
+    text: "Llega como borrador: tú lo revisas y lo publicas en Kino Social.",
+    textEn: "It arrives as a draft: you review and post it in Kino Social.",
   });
+  children.push({ type: "ElevatedButton", key: "shareSend", labelText: "Enviar", labelTextEn: "Send", submit: true });
+  return {
+    type: "BottomSheet",
+    key: "share",
+    children: [{ type: "Form", key: "shareForm", onSubmitted: "shareSend", children }],
+  };
+}
+
+function rail(row) {
+  return { type: "titleRail", key: "rail-" + row.id, title: row.title, items: row.items.slice(0, 30), size: "small" };
+}
+
+export async function screen({ state = {}, route }) {
+  const detail = route && route.name === "detail";
+
+  if (detail) {
+    const children = [];
+    if (state.error) {
+      children.push({ type: "errorState", title: t("No se pudo abrir", "Could not open"), text: state.error });
+      children.push({ type: "ElevatedButton", labelText: "Reintentar", labelTextEn: "Retry", onPressed: "retry", autofocus: true });
+    } else if (!state.item) {
+      children.push({ type: "Skeleton", shape: "block", height: 240 });
+      children.push({ type: "Skeleton", shape: "line", lines: 3 });
+    } else {
+      const item = state.item;
+      if (item.poster) children.push({ type: "Image", url: item.poster, aspect: "2:3", width: 160, fit: "cover", fallback: { type: "Text", text: item.title, padding: 12 } });
+      children.push({ type: "Text", text: item.title, style: "h2" });
+      if (item.meta) children.push({ type: "Text", text: item.meta, style: "caption", color: "muted" });
+      if (item.description) children.push({ type: "Text", text: item.description, maxLines: 8 });
+      children.push({
+        type: "ElevatedButton", key: "play", icon: "play", labelText: "Reproducir", labelTextEn: "Play",
+        autofocus: true, onPressed: { event: "play", arg: item.ref },
+      });
+      const extra = [];
+      if (state.tmdb > 0) extra.push({ type: "Button", variant: "secondary", icon: "share", labelText: "Compartir", labelTextEn: "Share", devices: ["phone"], onPressed: { event: "shareOpen" } });
+      extra.push({ type: "TextButton", icon: "info", labelText: "Ver ficha en Kino", labelTextEn: "Open in Kino", onPressed: { event: "kinoTitle", arg: item.ref } });
+      children.push({ type: "Row", wrap: true, gap: 8, children: extra });
+      if (state.episodes && state.episodes.length) {
+        children.push({ type: "Divider" });
+        children.push({ type: "Text", text: "Episodios", textEn: "Episodes", style: "h4" });
+        for (const one of state.episodes.slice(0, 60)) {
+          children.push({
+            type: "ListTile", key: "ep-" + one.ref, title: one.title, subtitle: "T" + one.season + " · " + one.number,
+            onTap: { event: "play", arg: one.ref },
+          });
+        }
+      }
+    }
+    const tree = PAGE(bar(t("Ficha", "Details"), "Details", BACK), children);
+    tree.floatingActionButton = null;
+    delete tree.floatingActionButton;
+    if (state.shareOpen) tree.body.children[0].children.push(shareSheet(state));
+    return tree;
+  }
+
+  const children = [
+    { type: "TextField", key: "q", kind: "search", labelText: "Buscar en Kimera", labelTextEn: "Search Kimera", onSubmitted: "search" },
+  ];
+  if (state.error) {
+    children.push({ type: "MaterialBanner", role: "error", text: state.error, action: { label: "Reintentar", labelEn: "Retry", onTap: "load" } });
+  }
+  if (state.query) {
+    children.push({ type: "Text", text: "Resultados de «" + state.query + "»", textEn: "Results for “" + state.query + "”", style: "h4" });
+    if (state.results && state.results.length) {
+      children.push({ type: "titleGrid", key: "results", items: state.results, columns: { compact: 3, expanded: 6 } });
+    } else if (state.searching) {
+      children.push({ type: "Skeleton", shape: "card", height: 200 });
+    } else {
+      children.push({ type: "emptyState", title: t("Sin resultados", "No results"), icon: "search" });
+    }
+  } else if (!state.rows) {
+    children.push({ type: "Skeleton", shape: "line", lines: 4 });
+  } else {
+    for (const row of state.rows) children.push(rail(row));
+    if (!state.rows.length) children.push({ type: "emptyState", title: t("Nada por aquí", "Nothing here"), icon: "movie" });
+    children.push({ type: "Divider" });
+    children.push({ type: "Card", children: [{ type: "settings", key: "cfg" }] });
+  }
+  const tree = PAGE(bar("Kimera", "Kimera", CLOSE, [SHARE_BUTTON]), children);
+  if (state.shareOpen) tree.body.children[0].children.push(shareSheet(state));
+  return tree;
+}
+
+async function loadDetail(ref) {
+  const [id, path] = splitRef(ref);
+  if (!id || !path.startsWith("/")) return { error: t("Ficha rara", "Odd item") };
+  const answer = await kino.fetch(BASE + path, { headers: HEADERS });
+  if (!answer.ok) return { error: t("El título no está disponible", "The title is not available") };
+  const data = json(await body(answer), "title-data");
+  if (!data) return { error: t("No se pudo leer la ficha", "Could not read the item") };
+  const kind = AS_SERIES.has(String(data.type || "")) ? "series" : "movie";
+  const item = {
+    ref,
+    id,
+    kind,
+    title: decode(data.name).slice(0, 200) || "Kimera",
+    poster: https(data.cover_url),
+    description: decode(data.description || "").slice(0, 900),
+    meta: (data.release_date ? String(data.release_date).slice(0, 4) + " · " : "") + (kind === "series" ? t("Serie", "Series") : t("Película", "Movie")),
+  };
+  let tmdb = 0;
+  if (typeof kino.tmdb === "function" && item.title) {
+    try {
+      const found = await kino.tmdb(kind === "series" ? "/search/tv" : "/search/movie", { query: item.title, language: "es-CO" });
+      const first = (found && found.results && found.results[0]) || null;
+      if (first && first.id) tmdb = Number(first.id) || 0;
+    } catch {
+      tmdb = 0;
+    }
+  }
+  const out = { item, tmdb };
+  if (kind === "series") {
+    try {
+      const list = await episodes(ref);
+      out.episodes = list.episodes;
+    } catch {
+      out.episodes = [];
+    }
+  }
+  return out;
+}
+
+export async function screenEvent({ name, arg, value, state = {}, route }) {
+  if (name === "open") {
+    if (route && route.name === "detail") {
+      const ref = (route.args && route.args.ref) || "";
+      const data = await loadDetail(ref);
+      return { state: { ...data, shareOpen: false } };
+    }
+    if (state.rows) return null;
+    try {
+      const rows = await home();
+      return { state: { rows, error: null } };
+    } catch (error) {
+      return { state: { error: t("Kimera no responde ahora", "Kimera is not answering now") } };
+    }
+  }
+
+  if (name === "load") {
+    return { state: { rows: null, error: null } };
+  }
+
+  if (name === "search") {
+    const q = String(value || "").trim();
+    if (!q) return { state: { query: null, results: [] } };
+    const found = await search(q);
+    const items = found.slice(0, 60).map((x) => ({ ...x, open: { screen: { args: { ref: x.ref } } } }));
+    return { state: { query: q, results: items, searching: false } };
+  }
+
+  if (name === "openItem") {
+    return { route: { push: "detail", params: { ref: String(arg || "") } } };
+  }
+
+  if (name === "back") return { route: { pop: true } };
+
+  if (name === "retry") {
+    const ref = (route && route.args && route.args.ref) || "";
+    const data = await loadDetail(ref);
+    return { state: { ...data, shareOpen: false } };
+  }
+
+  if (name === "play") {
+    const ref = String(arg || "");
+    const item = state.item || {};
+    return { go: { play: { ref, kind: item.kind === "series" ? "episode" : "movie", id: item.id, title: item.title } } };
+  }
+
+  if (name === "kinoTitle") {
+    const item = state.item || {};
+    return { go: { title: { ref: String(arg || item.ref || ""), kind: item.kind || "movie", id: item.id, title: item.title } } };
+  }
+
+  if (name === "shareOpen") {
+    const item = state.item;
+    const base = item ? t("Estoy viendo «" + item.title + "» en Kimera", "I'm watching “" + item.title + "” on Kimera") : "Kimera: películas y series en español";
+    return { ui: [{ open: "share" }], state: { shareOpen: true, shareText: base.slice(0, 500), attach: state.tmdb > 0 } };
+  }
+
+  if (name === "shareAttach") {
+    return { state: { attach: value === true } };
+  }
+
+  if (name === "shareSend") {
+    const form = value && typeof value === "object" ? value : {};
+    const inputs = state.inputs || {};
+    const text = String(form.shareText ?? inputs.shareText ?? state.shareText ?? "").slice(0, 500);
+    const attach = form.shareAttach ?? inputs.shareAttach ?? state.attach;
+    if (!text && !(attach && state.tmdb > 0)) {
+      return { toast: t("Escribe algo antes de enviar", "Write something before sending") };
+    }
+    if (typeof kino.plugins !== "object" || !kino.plugins) {
+      return { ui: [{ close: "share" }], toast: t("Actualiza Kino para compartir en Kino Social", "Update Kino to share to Kino Social") };
+    }
+    const item = state.item || {};
+    const payload = { text, from: "Kimera" };
+    if (attach && state.tmdb > 0) payload.title = { kind: item.kind === "series" ? "series" : "movie", tmdb: state.tmdb };
+    try {
+      await kino.plugins.call("social", "share", payload);
+      return { ui: [{ close: "share" }], state: { shareOpen: false }, toast: t("Queda como borrador en Kino Social", "It waits as a draft in Kino Social") };
+    } catch (error) {
+      const code = String((error && error.code) || "");
+      if (code === "provider_missing") {
+        const installed = (state.installed && state.installed[SOCIAL]) === true;
+        if (!installed) return { go: { installPlugin: { repo: SOCIAL } } };
+        return { toast: t("Kino Social está apagado o le falta configurarse", "Kino Social is off or needs setting up") };
+      }
+      if (code === "not_declared") return { toast: t("Actualiza Kino Social", "Update Kino Social") };
+      return { toast: t("No se pudo enviar a Kino Social", "Could not send to Kino Social") };
+    }
+  }
+
+  return null;
 }
