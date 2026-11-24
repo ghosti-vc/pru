@@ -4,7 +4,7 @@
   "version": "0.3.1",
   "apiVersion": 14,
   "entry": "plugin.js",
-  "icon": "icon.png",
+  "icon": "",
   "author": "ghosti-vc",
   "description": "Películas, series, dramas y animes de Kimera: estrenos, lo más visto y lo último agregado, con audio latino e inglés.",
   "color": "#1c1f24",
