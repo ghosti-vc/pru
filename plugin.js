@@ -12,39 +12,74 @@ function es() {
 function t(esText, enText) {
   return es() ? esText : enText;
 }
-function langHeader() {
-  return es() ? "es-419,es;q=0.9,en;q=0.8" : "en-US,en;q=0.9,es;q=0.8";
-}
 
 // ---------- red ----------
-async function req(url, opts) {
+const FULL_HEADERS = {
+  "user-agent": UA,
+  accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "accept-language": "es-419,es;q=0.9,en;q=0.8",
+  "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "same-origin",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+};
+
+async function rawFetch(url, opts) {
   const o = opts || {};
-  const headers = {
-    "user-agent": UA,
-    "accept-language": langHeader(),
-    accept: o.accept || "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  };
-  if (o.headers) for (const k in o.headers) headers[k] = o.headers[k];
-  const init = { headers, method: o.method || "GET" };
+  const base = o.minimal
+    ? { "user-agent": UA, accept: "*/*", "accept-language": "es-419,es;q=0.9" }
+    : Object.assign({}, FULL_HEADERS);
+  if (o.headers) for (const k in o.headers) base[k] = o.headers[k];
+  const init = { headers: base, method: o.method || "GET" };
   if (o.body != null) init.body = o.body;
   const res = await kino.fetch(url, init);
   const text = await res.text();
-  return { status: res.status, ok: res.ok, text, url: res.url || url };
+  return { status: res.status, text, url: res.url || url };
 }
 
 async function getHtml(url) {
-  const r = await req(url);
-  if (r.status === 404) {
+  const seen = [];
+  const tries = [
+    { minimal: false },
+    { minimal: true, headers: { referer: BASE + "/" } },
+    { minimal: false, headers: { referer: BASE + "/" } },
+  ];
+  let notFound = false;
+  let rateLimited = false;
+  for (const variant of tries) {
+    let r = null;
+    try {
+      r = await rawFetch(url, variant);
+    } catch (e) {
+      seen.push((e && e.code) || "network");
+      continue;
+    }
+    seen.push(String(r.status));
+    if (r.status === 404) {
+      notFound = true;
+      break;
+    }
+    if (r.status === 429) {
+      rateLimited = true;
+      break;
+    }
+    if (r.status < 400) return r;
+  }
+  const trail = seen.join(",");
+  if (notFound) {
     throw kino.error("not_found", "http 404", {
       userMessage: t("Ese título ya no está en el sitio.", "That title is gone from the site."),
     });
   }
-  if (r.status >= 400) {
-    throw kino.error("unavailable", "http " + r.status, {
-      userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
-    });
-  }
-  return r;
+  if (rateLimited) throw kino.error("rate_limited", "http 429 (" + trail + ")");
+  throw kino.error("unavailable", "http " + seen[seen.length - 1] + " (" + trail + ")", {
+    userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
+  });
 }
 
 // ---------- texto ----------
@@ -113,13 +148,11 @@ function parseCards(html) {
     if (!title) continue;
     const path = href.startsWith("http") ? new URL(href).pathname : href;
     const poster = abs(
-      firstMatch(/class="card__poster"[^>]*src="([^"]+)"/, c) ||
-        firstMatch(/src="([^"]+)"/, c)
+      firstMatch(/class="card__poster"[^>]*src="([^"]+)"/, c) || firstMatch(/src="([^"]+)"/, c)
     );
     const year = parseInt(firstMatch(/card__year">\s*(\d{4})/, c), 10);
     const badge = firstMatch(/card__badge\s+(badge-[a-z]+)/, c);
-    const isSeries =
-      path.includes("/serie/") || (badge && badge !== "badge-movie");
+    const isSeries = path.includes("/serie/") || (badge && badge !== "badge-movie");
     const genre = GENRE_OF_BADGE[badge] || (isSeries ? "series" : "peliculas");
     const item = {
       id: slugOf(path),
@@ -159,7 +192,10 @@ export async function home() {
   await kino.sleep(0);
   const results = await Promise.all(
     ROWS.map((row) =>
-      listPage(row.path).catch((e) => ({ items: [], error: (e && e.code) || "error" }))
+      listPage(row.path).catch((e) => ({
+        items: [],
+        error: (e && (e.message || e.code)) || "error",
+      }))
     )
   );
   const rows = [];
@@ -168,8 +204,7 @@ export async function home() {
     const row = ROWS[i];
     const got = results[i];
     if (!got || !got.items.length) {
-      if (got && got.error) reasons.push(row.id + "=" + got.error);
-      else reasons.push(row.id + "=vacio");
+      reasons.push(row.id + "=" + (got && got.error ? got.error : "vacio"));
       continue;
     }
     rows.push({
@@ -180,8 +215,9 @@ export async function home() {
       items: got.items.slice(0, 60),
     });
   }
+  kino.log("home filas=" + rows.length + " " + reasons.join(" ").slice(0, 160));
   if (!rows.length) {
-    throw kino.error("unavailable", reasons.join(","), {
+    throw kino.error("unavailable", reasons.join(" | ").slice(0, 200), {
       userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
     });
   }
@@ -229,14 +265,11 @@ export async function episodes(ref) {
         parseInt(firstMatch(/episodio-(\d+)/, path), 10) ||
         parseInt(firstMatch(/(\d+)/, numText), 10) ||
         1;
-      const label = clean(
-        firstMatch(/text-sm font-semibold[^"]*">([\s\S]*?)<\//, l)
-      );
+      const label = clean(firstMatch(/text-sm font-semibold[^"]*">([\s\S]*?)<\//, l));
       items.push({
         id: slugOf(path),
         ref: path,
-        title:
-          "T" + season + "E" + String(ep).padStart(2, "0") + (label ? " · " + label : ""),
+        title: "T" + season + "E" + String(ep).padStart(2, "0") + (label ? " · " + label : ""),
         season,
         episode: ep,
         kind: "episode",
@@ -279,12 +312,12 @@ async function playerUrl(token, pageUrl, csrf) {
   };
   if (csrf) headers["x-csrf-token"] = csrf;
   const body = JSON.stringify({ token, player_token: token, _token: csrf || undefined });
-  let r = await req(origin + "/api/player-url", { method: "POST", headers, body });
+  let r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
   if (r.status === 419) {
     try {
-      await req(origin + "/sanctum/csrf-cookie", { accept: "*/*" });
+      await rawFetch(origin + "/sanctum/csrf-cookie", { minimal: true });
     } catch (e) {}
-    r = await req(origin + "/api/player-url", { method: "POST", headers, body });
+    r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
   }
   if (r.status >= 400) throw kino.error("unavailable", "player-url " + r.status);
   let url = "";
@@ -299,13 +332,6 @@ async function playerUrl(token, pageUrl, csrf) {
 }
 
 // ---------- embed69: POW + AES ----------
-function b64ToBytes(s) {
-  const bin = atob(String(s).replace(/-/g, "+").replace(/_/g, "/"));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 function sha256Hex(text) {
   return String(kino.crypto.hash("sha256", text)).replace(/^0x/, "").toLowerCase();
 }
@@ -351,7 +377,8 @@ function unpackPacker(html) {
   const base = parseInt(m[2], 10);
   const words = m[4].split("|");
   if (!base || base < 2) return "";
-  const enc = (c) => (c < base ? "" : enc(Math.floor(c / base))) +
+  const enc = (c) =>
+    (c < base ? "" : enc(Math.floor(c / base))) +
     (c % base > 35 ? String.fromCharCode((c % base) + 29) : (c % base).toString(36));
   return payload.replace(/\b\w+\b/g, (w) => {
     const idx = parseInt(w, base);
@@ -383,16 +410,14 @@ function mimeOf(url) {
 }
 
 async function fromEmbed(embedUrl, referer) {
-  const r = await req(embedUrl, { headers: { referer: referer || BASE + "/" } });
-  const html = r.text;
-  let found = findMedia(html, embedUrl);
-  if (!found) found = findMedia(unpackPacker(html), embedUrl);
-  if (!found) return "";
+  const r = await rawFetch(embedUrl, { headers: { referer: referer || BASE + "/" } });
+  let found = findMedia(r.text, embedUrl);
+  if (!found) found = findMedia(unpackPacker(r.text), embedUrl);
   return found;
 }
 
 async function fromEmbed69(embedUrl, referer) {
-  const r = await req(embedUrl, { headers: { referer: referer || BASE + "/" } });
+  const r = await rawFetch(embedUrl, { headers: { referer: referer || BASE + "/" } });
   const html = r.text;
 
   const dataB64 = firstMatch(/dataLink\s*[:=]\s*["']([A-Za-z0-9+/=]{16,})["']/, html);
@@ -409,7 +434,7 @@ async function fromEmbed69(embedUrl, referer) {
       for (const p of paths) {
         let j = null;
         try {
-          const kr = await req(origin + p, { accept: "application/json" });
+          const kr = await rawFetch(origin + p, { headers: { accept: "application/json" } });
           if (kr.status < 400) j = JSON.parse(kr.text);
         } catch (e) {}
         if (!j) continue;
@@ -463,9 +488,7 @@ async function oneServer(token, pageUrl, csrf) {
   const target = await playerUrl(token, pageUrl, csrf);
   const referer = BASE + "/";
   let url = "";
-  if (/embed69\.org/.test(target)) {
-    url = await fromEmbed69(target, referer);
-  }
+  if (/embed69\.org/.test(target)) url = await fromEmbed69(target, referer);
   if (!url) {
     const norm = normalize(target);
     url = await fromEmbed(norm, referer);
@@ -480,7 +503,6 @@ export async function resolve(ref) {
   await kino.sleep(0);
   const raw = String(ref || "");
 
-  // alternativa: "<ruta>|<token>"
   const bar = raw.indexOf("|");
   if (bar > 0) {
     const pageUrl = abs(raw.slice(0, bar));
