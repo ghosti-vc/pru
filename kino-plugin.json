@@ -1,17 +1,17 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.3.1",
-  "apiVersion": 14,
+  "version": "0.4.0",
+  "apiVersion": 13,
   "entry": "plugin.js",
-  "icon": "",
+  "icon": "icon.png",
   "author": "ghosti-vc",
-  "description": "Películas, series, dramas y animes de Kimera: estrenos, lo más visto y lo último agregado, con audio latino e inglés.",
+  "description": "Películas, series, dramas y animes de Kimera: estrenos, lo más visto y lo último agregado.",
   "color": "#1c1f24",
   "categories": ["movies", "series", "anime"],
   "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
   "streamHosts": "any",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve", "download", "screen"],
+  "capabilities": ["home", "browse", "search", "episodes", "resolve", "byteSource", "screen"],
   "screen": {
     "label": "Kimera",
     "icon": "movie"
