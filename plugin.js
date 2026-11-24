@@ -1,7 +1,7 @@
 // Kino plugin: Kimera (kimeraweb.com) — películas y series.
-// El sitio sirve el video sin audio y cada idioma en su propio playlist HLS. resolve() arma un
-// master con EXT-X-MEDIA para que el reproductor reciba video y audio juntos; si el ajuste
-// "mix" está apagado, entrega el video y los idiomas como audioTracks.
+// El sitio sirve el video sin audio y cada idioma en su propio playlist HLS: se entrega el video
+// por https y los idiomas como audioTracks. Con el ajuste "mix" encendido se intenta además un
+// master cosido con EXT-X-MEDIA.
 
 const BASE = "https://kimeraweb.com";
 const CDN = "https://cloudcdn.sbs";
@@ -83,8 +83,6 @@ function splitRef(ref) {
 }
 
 // ── Fichas del HTML ───────────────────────────────────────────────────────────
-// Cada aparición de una ficha es una tarjeta: portada y título se buscan en la ventana que llega
-// hasta la aparición siguiente, así que el orden del HTML no importa.
 function cards(html) {
   const out = [];
   let links = [];
@@ -226,7 +224,6 @@ export async function home() {
 }
 
 // ── Catálogo ─────────────────────────────────────────────────────────────────
-// /catalog?q=&type=&tag=&sort=&page= trae las fichas dentro del JSON "catalog-initial-data".
 function catalogItems(html) {
   const data = json(html, "catalog-initial-data");
   const out = [];
@@ -501,11 +498,12 @@ export async function resolve(ref) {
     if (subtitles.length >= 30) break;
   }
 
-  const stream = { mime: "application/vnd.apple.mpegurl", headers, subtitles };
+  const stream = { mime: "application/vnd.apple.mpegurl", headers, subtitles, audioTracks };
   if (alternatives.length) stream.alternatives = alternatives;
+  log("resolve: video=" + url + " audios=" + audioTracks.length);
 
-  // Coser el audio: sin esto el video va mudo.
-  if (setting("mix", true) !== false && audioTracks.length) {
+  // El master cosido solo si el ajuste está encendido: como url, Kino lo rechaza.
+  if (setting("mix", false) === true && audioTracks.length) {
     try {
       const glued = await master(url, audioTracks, headers);
       if (glued) {
@@ -515,284 +513,7 @@ export async function resolve(ref) {
       log("el video ya trae audio");
     } catch (error) {
       log("master falló (" + String(error.message || error).slice(0, 60) + "): video + audioTracks");
-      return { ...stream, url, audioTracks };
     }
   }
-  return { ...stream, url, audioTracks };
-}
-
-// ── Pantalla ─────────────────────────────────────────────────────────────────
-const PAGE = (appBar, children) => ({
-  type: "Scaffold",
-  appBar,
-  body: { type: "SingleChildScrollView", children: [{ type: "Column", padding: 16, gap: 16, children }] },
-});
-
-const CLOSE = { type: "IconButton", icon: "close", labelText: "Cerrar", labelTextEn: "Close", onPressed: { close: true } };
-const BACK = { type: "IconButton", icon: "arrow_back", labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "back" } };
-
-function bar(title, titleEn, leading, actions) {
-  const appBar = { type: "AppBar", title, titleEn, mergeWithKinoBar: true, dense: true, leading };
-  if (actions) appBar.actions = actions;
-  return appBar;
-}
-
-const SHARE_BUTTON = {
-  type: "IconButton", icon: "share", labelText: "Compartir", labelTextEn: "Share",
-  devices: ["phone"], onPressed: { event: "shareOpen" },
-};
-
-function shareSheet(state) {
-  const attach = state.attach !== false && state.tmdb > 0;
-  const children = [
-    { type: "Text", text: "Compartir en Kino Social", textEn: "Share to Kino Social", style: "h4" },
-    { type: "TextField", key: "shareText", multiline: true, maxLines: 4, maxLength: 500, labelText: "Texto", labelTextEn: "Text", value: state.shareText || "" },
-  ];
-  if (state.tmdb > 0) {
-    children.push({ type: "Switch", key: "shareAttach", labelText: "Adjuntar el título", labelTextEn: "Attach the title", value: attach, onChanged: "shareAttach" });
-  }
-  children.push({
-    type: "Text", style: "caption", color: "muted",
-    text: "Llega como borrador: tú lo revisas y lo publicas en Kino Social.",
-    textEn: "It arrives as a draft: you review and post it in Kino Social.",
-  });
-  children.push({ type: "ElevatedButton", key: "shareSend", labelText: "Enviar", labelTextEn: "Send", submit: true });
-  return {
-    type: "BottomSheet",
-    key: "share",
-    children: [{ type: "Form", key: "shareForm", onSubmitted: "shareSend", children }],
-  };
-}
-
-function rail(row) {
-  const items = row.items.slice(0, 30).map((item) => ({ ...item, onTap: { event: "openItem", arg: item.ref } }));
-  return { type: "titleRail", key: "rail-" + row.id, title: row.title, items, size: "small" };
-}
-
-export async function screen({ state = {}, route }) {
-  const detail = route && route.name === "detail";
-
-  if (detail) {
-    const children = [];
-    if (state.error) {
-      children.push({ type: "errorState", title: t("No se pudo abrir", "Could not open"), text: state.error });
-      children.push({ type: "ElevatedButton", labelText: "Reintentar", labelTextEn: "Retry", onPressed: "retry", autofocus: true });
-    } else if (!state.item) {
-      children.push({ type: "Skeleton", shape: "block", height: 240 });
-      children.push({ type: "Skeleton", shape: "line", lines: 3 });
-    } else {
-      const item = state.item;
-      if (item.poster) children.push({ type: "Image", url: item.poster, aspect: "2:3", width: 160, fit: "cover", fallback: { type: "Text", text: item.title, padding: 12 } });
-      children.push({ type: "Text", text: item.title, style: "h2" });
-      if (item.meta) children.push({ type: "Text", text: item.meta, style: "caption", color: "muted" });
-      if (item.description) children.push({ type: "Text", text: item.description, maxLines: 8 });
-      children.push({
-        type: "ElevatedButton", key: "play", icon: "play", labelText: "Reproducir", labelTextEn: "Play",
-        autofocus: true, onPressed: { event: "play", arg: item.ref },
-      });
-      const extra = [];
-      if (state.tmdb > 0) extra.push({ type: "TextButton", icon: "share", labelText: "Compartir", labelTextEn: "Share", devices: ["phone"], onPressed: { event: "shareOpen" } });
-      extra.push({ type: "TextButton", icon: "info", labelText: "Ver ficha en Kino", labelTextEn: "Open in Kino", onPressed: { event: "kinoTitle", arg: item.ref } });
-      children.push({ type: "Row", wrap: true, gap: 8, children: extra });
-      if (state.episodes && state.episodes.length) {
-        children.push({ type: "Divider" });
-        children.push({ type: "Text", text: "Episodios", textEn: "Episodes", style: "h4" });
-        for (const one of state.episodes.slice(0, 60)) {
-          children.push({
-            type: "ListTile", key: "ep-" + one.ref, title: one.title, subtitle: "T" + one.season + " · " + one.number,
-            onTap: { event: "play", arg: one.ref },
-          });
-        }
-      }
-    }
-    const tree = PAGE(bar(t("Ficha", "Details"), "Details", BACK), children);
-    if (state.shareOpen) tree.body.children[0].children.push(shareSheet(state));
-    return tree;
-  }
-
-  const children = [
-    { type: "TextField", key: "q", kind: "search", labelText: "Buscar en Kimera", labelTextEn: "Search Kimera", onSubmitted: "search" },
-  ];
-  if (state.error) {
-    children.push({ type: "MaterialBanner", role: "error", text: state.error, action: { label: "Reintentar", labelEn: "Retry", onTap: "load" } });
-  }
-  if (state.query) {
-    children.push({ type: "Text", text: "Resultados de «" + state.query + "»", textEn: "Results for “" + state.query + "”", style: "h4" });
-    if (state.results && state.results.length) {
-      children.push({ type: "titleGrid", key: "results", items: state.results, columns: { compact: 3, expanded: 6 } });
-    } else if (state.searching) {
-      children.push({ type: "Skeleton", shape: "card", height: 200 });
-    } else {
-      children.push({ type: "emptyState", title: t("Sin resultados", "No results"), icon: "search" });
-    }
-  } else if (!state.rows) {
-    children.push({ type: "Skeleton", shape: "line", lines: 4 });
-  } else {
-    for (const row of state.rows) children.push(rail(row));
-    if (!state.rows.length) children.push({ type: "emptyState", title: t("Nada por aquí", "Nothing here"), icon: "movie" });
-    children.push({ type: "Divider" });
-    children.push({ type: "Card", children: [{ type: "settings", key: "cfg" }] });
-  }
-  const tree = PAGE(bar("Kimera", "Kimera", CLOSE, [SHARE_BUTTON]), children);
-  if (state.shareOpen) tree.body.children[0].children.push(shareSheet(state));
-  return tree;
-}
-
-async function loadDetail(ref) {
-  const [id, path] = splitRef(ref);
-  if (!id || !path.startsWith("/")) return { error: t("Ficha rara", "Odd item") };
-  const answer = await kino.fetch(BASE + path, { headers: HEADERS });
-  if (!answer.ok) return { error: t("El título no está disponible", "The title is not available") };
-  const data = json(await body(answer), "title-data");
-  if (!data) return { error: t("No se pudo leer la ficha", "Could not read the item") };
-  const kind = AS_SERIES.has(String(data.type || "")) ? "series" : "movie";
-  const item = {
-    ref,
-    id,
-    kind,
-    title: decode(data.name).slice(0, 200) || "Kimera",
-    poster: https(data.cover_url),
-    description: decode(data.description || "").slice(0, 900),
-    meta: (data.release_date ? String(data.release_date).slice(0, 4) + " · " : "") + (kind === "series" ? t("Serie", "Series") : t("Película", "Movie")),
-  };
-  let tmdb = 0;
-  if (typeof kino.tmdb === "function" && item.title) {
-    try {
-      const found = await kino.tmdb(kind === "series" ? "/search/tv" : "/search/movie", { query: item.title, language: "es-CO" });
-      const first = (found && found.results && found.results[0]) || null;
-      if (first && first.id) tmdb = Number(first.id) || 0;
-    } catch {
-      tmdb = 0;
-    }
-  }
-  const out = { item, tmdb };
-  if (kind === "series") {
-    try {
-      const list = await episodes(ref);
-      out.episodes = list.episodes;
-    } catch {
-      out.episodes = [];
-    }
-  }
-  return out;
-}
-
-export async function screenEvent({ name, arg, value, state = {}, route, installed = {} }) {
-  if (name === "open") {
-    const asked = (route && ((route.args && route.args.ref) || (route.params && route.params.ref))) || state.ref || "";
-    const onDetail = Boolean(route && route.name === "detail");
-    if (asked && (!onDetail || !state.item)) {
-      try {
-        const data = await loadDetail(asked);
-        const patch = { state: { ...data, ref: asked, shareOpen: false } };
-        if (!onDetail) patch.route = { push: "detail", params: { ref: asked } };
-        return patch;
-      } catch (error) {
-        log("detail falló " + asked + " " + String((error && error.code) || error).slice(0, 60));
-        const patch = { state: { ref: asked, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") } };
-        if (!onDetail) patch.route = { push: "detail", params: { ref: asked } };
-        return patch;
-      }
-    }
-    if (onDetail) return null;
-    if (state.rows) return null;
-    try {
-      const rows = await home();
-      return { state: { rows, error: null } };
-    } catch (error) {
-      return { state: { error: t("Kimera no responde ahora", "Kimera is not answering now") } };
-    }
-  }
-
-  if (name === "load") {
-    return { state: { rows: null, error: null } };
-  }
-
-  if (name === "search") {
-    const q = String(value || "").trim();
-    if (!q) return { state: { query: null, results: [] } };
-    const found = await search(q);
-    const items = found.slice(0, 60).map((x) => ({
-      ...x,
-      open: { screen: { args: { ref: x.ref } } },
-      onTap: { event: "openItem", arg: x.ref },
-    }));
-    return { state: { query: q, results: items, searching: false } };
-  }
-
-  if (name === "openItem") {
-    const ref = String(arg || "");
-    log("abrir " + ref);
-    try {
-      const data = await loadDetail(ref);
-      return { state: { ...data, ref, shareOpen: false }, route: { push: "detail", params: { ref } } };
-    } catch (error) {
-      log("detail falló " + ref + " " + String((error && error.code) || error).slice(0, 60));
-      return { state: { ref, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") }, route: { push: "detail", params: { ref } } };
-    }
-  }
-
-  if (name === "back") return { route: { pop: true } };
-
-  if (name === "retry") {
-    const ref = (route && ((route.args && route.args.ref) || (route.params && route.params.ref))) || state.ref || "";
-    try {
-      const data = await loadDetail(ref);
-      return { state: { ...data, ref, shareOpen: false, error: null } };
-    } catch (error) {
-      log("detail falló " + ref);
-      return { state: { ref, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") } };
-    }
-  }
-
-  if (name === "play") {
-    const ref = String(arg || "");
-    const item = state.item || {};
-    return { go: { play: { ref, kind: item.kind === "series" ? "episode" : "movie", id: item.id, title: item.title } } };
-  }
-
-  if (name === "kinoTitle") {
-    const item = state.item || {};
-    return { go: { title: { ref: String(arg || item.ref || ""), kind: item.kind || "movie", id: item.id, title: item.title } } };
-  }
-
-  if (name === "shareOpen") {
-    const item = state.item;
-    const base = item ? t("Estoy viendo «" + item.title + "» en Kimera", "I'm watching “" + item.title + "” on Kimera") : "Kimera: películas y series en español";
-    return { ui: [{ open: "share" }], state: { shareOpen: true, shareText: base.slice(0, 500), attach: state.tmdb > 0 } };
-  }
-
-  if (name === "shareAttach") {
-    return { state: { attach: value === true } };
-  }
-
-  if (name === "shareSend") {
-    const form = value && typeof value === "object" ? value : {};
-    const inputs = state.inputs || {};
-    const shareText = String(form.shareText ?? inputs.shareText ?? state.shareText ?? "").slice(0, 500);
-    const attach = form.shareAttach ?? inputs.shareAttach ?? state.attach;
-    if (!shareText && !(attach && state.tmdb > 0)) {
-      return { toast: t("Escribe algo antes de enviar", "Write something before sending") };
-    }
-    if (typeof kino.plugins !== "object" || !kino.plugins) {
-      return { ui: [{ close: "share" }], toast: t("Actualiza Kino para compartir en Kino Social", "Update Kino to share to Kino Social") };
-    }
-    const item = state.item || {};
-    const payload = { text: shareText, from: "Kimera" };
-    if (attach && state.tmdb > 0) payload.title = { kind: item.kind === "series" ? "series" : "movie", tmdb: state.tmdb };
-    try {
-      await kino.plugins.call("social", "share", payload);
-      return { ui: [{ close: "share" }], state: { shareOpen: false }, toast: t("Queda como borrador en Kino Social", "It waits as a draft in Kino Social") };
-    } catch (error) {
-      const code = String((error && error.code) || "");
-      if (code === "provider_missing") {
-        if (installed[SOCIAL] !== true) return { go: { installPlugin: { repo: SOCIAL } } };
-        return { toast: t("Kino Social está apagado o le falta configurarse", "Kino Social is off or needs setting up") };
-      }
-      if (code === "not_declared") return { toast: t("Actualiza Kino Social", "Update Kino Social") };
-      return { toast: t("No se pudo enviar a Kino Social", "Could not send to Kino Social") };
-    }
-  }
-
-  return null;
+  return { ...stream, url };
 }
