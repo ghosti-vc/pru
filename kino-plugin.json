@@ -1,7 +1,7 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -12,30 +12,30 @@
   "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
   "streamHosts": "any",
   "capabilities": ["home", "browse", "search", "episodes", "resolve", "download"],
+  "recommends": ["kinotvapp/kino-social"],
   "settings": [
     {
       "key": "mix",
       "type": "toggle",
       "label": "Unir el audio al video",
-      "hint": "Déjalo encendido: sin esto el video sale mudo.",
-      "default": true
+      "default": true,
+      "hint": "Cose el video con el audio latino. Apágalo si algún título falla."
     }
   ],
-  "recommends": ["kinotvapp/kino-social"],
   "enhancements": {
     "14": {
-      "capabilities": ["screen"],
       "screen": {
-        "label": "Explorar",
-        "icon": "search",
-        "menuOpens": "screen",
-        "opensFrom": ["menu", "settings"],
-        "settingsButton": { "label": "Explorar Kimera" }
+        "label": "Kimera",
+        "icon": "movie"
       }
     },
     "20": {
       "consumes": {
-        "social": { "repo": "kinotvapp/kino-social", "door": "wall", "calls": ["share"] }
+        "social": {
+          "repo": "kinotvapp/kino-social",
+          "door": "wall",
+          "calls": ["share"]
+        }
       },
       "openFrom": { "routes": ["detail"] }
     }
