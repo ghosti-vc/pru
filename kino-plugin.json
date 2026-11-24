@@ -1,7 +1,7 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -11,17 +11,8 @@
   "categories": ["movies", "series", "anime"],
   "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
   "streamHosts": "any",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve", "download"],
+  "capabilities": ["home", "browse", "search", "episodes", "resolve", "download", "screen"],
   "recommends": ["kinotvapp/kino-social"],
-  "settings": [
-    {
-      "key": "mix",
-      "type": "toggle",
-      "label": "Coser el audio en un master",
-      "default": false,
-      "hint": "Apagado: video y audio aparte. Enciéndelo solo para probar."
-    }
-  ],
   "enhancements": {
     "14": {
       "screen": {
