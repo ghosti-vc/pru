@@ -1,7 +1,7 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -17,9 +17,9 @@
     {
       "key": "mix",
       "type": "toggle",
-      "label": "Unir el audio al video",
-      "default": true,
-      "hint": "Cose el video con el audio latino. Apágalo si algún título falla."
+      "label": "Coser el audio en un master",
+      "default": false,
+      "hint": "Déjalo apagado si el audio ya suena. Enciéndelo solo para probar el master cosido."
     }
   ],
   "enhancements": {
@@ -33,8 +33,8 @@
       "consumes": {
         "social": {
           "repo": "kinotvapp/kino-social",
-          "door": "wall",
-          "calls": ["share"]
+          "calls": ["share"],
+          "door": "wall"
         }
       },
       "openFrom": { "routes": ["detail"] }
