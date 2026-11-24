@@ -1,15 +1,43 @@
 {
-  "id": "tudorama",
-  "name": "TuDorama",
-  "description": "Doramas coreanos, chinos y japoneses, películas y variedades de TuDorama, con el Latino primero, luego Castellano y Coreano.",
-  "author": "Ghosti-vc",
-  "version": "0.1.0",
-  "apiVersion": 9,
+  "id": "kimera",
+  "name": "Kimera",
+  "version": "0.2.0",
+  "apiVersion": 6,
   "entry": "plugin.js",
-  "capabilities": ["home", "browse", "search", "episodes", "resolve"],
-  "hosts": ["tudorama.com", "www.tudorama.com", "cdn.tudorama.com", "media.themoviedb.org", "image.tmdb.org"],
-  "browser": true,
-  "resolveAhead": true,
-  "fetchHosts": "any",
-  "streamHosts": "any"
+  "icon": "icon.png",
+  "author": "ghosti-vc",
+  "description": "Películas, series, dramas y animes de Kimera: estrenos, lo más visto y lo último agregado, con audio latino e inglés.",
+  "color": "#1c1f24",
+  "categories": ["movies", "series", "anime"],
+  "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
+  "streamHosts": "any",
+  "capabilities": ["home", "browse", "search", "episodes", "resolve", "download"],
+  "settings": [
+    {
+      "key": "mix",
+      "type": "toggle",
+      "label": "Unir el audio al video",
+      "hint": "Déjalo encendido: sin esto el video sale mudo.",
+      "default": true
+    }
+  ],
+  "recommends": ["kinotvapp/kino-social"],
+  "enhancements": {
+    "14": {
+      "capabilities": ["screen"],
+      "screen": {
+        "label": "Explorar",
+        "icon": "search",
+        "menuOpens": "screen",
+        "opensFrom": ["menu", "settings"],
+        "settingsButton": { "label": "Explorar Kimera" }
+      }
+    },
+    "20": {
+      "consumes": {
+        "social": { "repo": "kinotvapp/kino-social", "door": "wall", "calls": ["share"] }
+      },
+      "openFrom": { "routes": ["detail"] }
+    }
+  }
 }
