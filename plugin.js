@@ -1,7 +1,7 @@
 // Kino plugin: Kimera (kimeraweb.com) — películas y series.
-// El sitio sirve el video sin audio y cada idioma en su propio playlist HLS: se entrega el video
-// por https y los idiomas como audioTracks. Con el ajuste "mix" encendido se intenta además un
-// master cosido con EXT-X-MEDIA.
+// El sitio entrega el video sin audio y cada idioma en su propio playlist HLS.
+// El video se arma como playlist .m3u8 (sin extensión el reproductor no lo reconoce) y los idiomas
+// van como audioTracks, que Kino une al video y ofrece en su menú de audio.
 
 const BASE = "https://kimeraweb.com";
 const CDN = "https://cloudcdn.sbs";
@@ -56,10 +56,21 @@ function attr(attrs, name) {
   return found ? found[1] : "";
 }
 
-function https(value) {
-  let url = String(value || "");
+// Cualquier dirección https; un camino suelto se resuelve contra el CDN.
+function media(value) {
+  let url = String(value || "").trim();
+  if (!url) return undefined;
   if (url.startsWith("/")) url = CDN + url;
-  return url.startsWith(CDN + "/") ? url : undefined;
+  return /^https:\/\//i.test(url) ? url : undefined;
+}
+
+// Igual que media(), pero garantiza la extensión .m3u8: sin ella Kino no detecta HLS.
+function playlist(value) {
+  const url = media(value);
+  if (!url) return undefined;
+  if (/\.m3u8/i.test(url)) return url;
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url + ".m3u8" : url.slice(0, cut) + ".m3u8" + url.slice(cut);
 }
 
 function escapeRegExp(value) {
@@ -103,10 +114,10 @@ function cards(html) {
     const window = html.slice(link.end, Math.min(stop, link.end + 2000));
     const wide = html.slice(link.end, Math.min(html.length, link.end + 2600));
     const image = /<img([^>]*)>/i.exec(window);
-    let poster = image ? https(attr(image[1], "data-src")) || https(attr(image[1], "src")) : undefined;
+    let poster = image ? media(attr(image[1], "data-src")) || media(attr(image[1], "src")) : undefined;
     if (!poster) {
       const background = /url\((['"]?)(https?:\/\/[^)'"]+)\1\)/i.exec(window);
-      if (background) poster = https(background[2]);
+      if (background) poster = media(background[2]);
     }
     let title = image ? decode(attr(image[1], "alt")) : "";
     if (!title) {
@@ -238,7 +249,7 @@ function catalogItems(html) {
         ref: m[2] + "|" + url,
         title: decode(it.name).slice(0, 200),
         kind: series ? "series" : "movie",
-        poster: https(it.vertical_cover_url) || https(it.cover_url),
+        poster: media(it.vertical_cover_url) || media(it.cover_url),
       });
     }
     return { items: out, hasNext: !!data.has_next, pages: Number(data.pages) || 1 };
@@ -312,7 +323,7 @@ async function seriesInfo(id, path) {
       const data = json(await body(answer), "title-data");
       if (data) {
         info.title = decode(data.name).slice(0, 200);
-        info.poster = https(data.cover_url);
+        info.poster = media(data.cover_url);
       }
     }
   } catch (error) {
@@ -363,74 +374,6 @@ async function firstEpisode(id) {
 }
 
 // ── Reproducción ─────────────────────────────────────────────────────────────
-function absUrl(base, ref) {
-  if (/^https?:\/\//i.test(ref)) return ref;
-  const origin = (/^(https?:\/\/[^\/]+)/i.exec(base) || [])[1] || "";
-  if (ref.startsWith("/")) return origin + ref;
-  return base.replace(/[?#].*$/, "").replace(/[^\/]*$/, "") + ref;
-}
-
-function absolute(text, base) {
-  return String(text)
-    .split(/\r?\n/)
-    .map((line) => {
-      const clean = line.trim();
-      if (!clean) return line;
-      if (clean[0] === "#") return line.replace(/URI="([^"]+)"/g, (_, u) => 'URI="' + absUrl(base, u) + '"');
-      return absUrl(base, clean);
-    })
-    .join("\n");
-}
-
-// Master HLS con el video y los idiomas cosidos. Devuelve null si el video ya trae su audio.
-async function master(videoUrl, tracks, headers) {
-  const answer = await kino.fetch(videoUrl, { headers });
-  if (!answer.ok) throw new Error("video " + answer.status);
-  const raw = await body(answer);
-  if (!/^#EXTM3U/.test(raw)) throw new Error("el video no es HLS");
-  if (/#EXT-X-MEDIA:TYPE=AUDIO/i.test(raw)) return null;
-
-  const out = ["#EXTM3U", "#EXT-X-VERSION:7"];
-  const media = [];
-  for (let i = 0; i < tracks.length; i++) {
-    const track = tracks[i];
-    try {
-      const probe = await kino.fetch(track.url, { headers });
-      if (!probe.ok) continue;
-      if (!/^#EXTM3U/.test(await body(probe))) continue;
-      const lang = String(track.lang || "und").toLowerCase().replace(/[^a-z-]/g, "").slice(0, 8) || "und";
-      const name = String(track.label || "Audio " + (i + 1)).replace(/["\\]/g, "").slice(0, 40) || "Audio";
-      media.push(
-        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="ka",NAME="' + name + '",LANGUAGE="' + lang +
-        '",DEFAULT=' + (i === 0 ? "YES" : "NO") + ',AUTOSELECT=YES,URI="' + track.url + '"'
-      );
-    } catch (error) {
-      log("audio " + i + " descartado: " + String(error.message || error).slice(0, 60));
-    }
-  }
-  if (!media.length) throw new Error("sin audios utilizables");
-  out.push(...media);
-
-  if (/#EXT-X-STREAM-INF/i.test(raw)) {
-    for (const line of absolute(raw, videoUrl).split(/\r?\n/)) {
-      if (!line || /^#EXTM3U/.test(line)) continue;
-      out.push(/^#EXT-X-STREAM-INF/i.test(line) ? line.replace(/\s+$/, "") + ',AUDIO="ka"' : line);
-    }
-  } else {
-    out.push('#EXT-X-STREAM-INF:BANDWIDTH=4000000,AUDIO="ka"', videoUrl);
-  }
-  return out.join("\n");
-}
-
-function setting(key, fallback) {
-  try {
-    const v = typeof kino.config.get === "function" ? kino.config.get(key) : kino.config[key];
-    return v === undefined || v === null ? fallback : v;
-  } catch {
-    return fallback;
-  }
-}
-
 export async function resolve(ref) {
   await null;
   const raw = String(ref || "");
@@ -467,7 +410,7 @@ export async function resolve(ref) {
   if (!chosen) throw kino.error("not_found", "sin servidor", { userMessage: "Este título no tiene ningún servidor disponible ahora." });
 
   const option = chosen.option;
-  const url = https(option.url);
+  const url = playlist(option.url);
   if (!url) throw kino.error("unavailable", "url rara");
 
   const alternatives = [];
@@ -478,42 +421,152 @@ export async function resolve(ref) {
     if (alternatives.length >= 8) break;
   }
 
+  // El video viene mudo y cada idioma en su playlist: van como audioTracks, el latino primero.
   const audioTracks = [];
   if (String(option.track_mode || "") === "separated") {
-    for (const track of option.audio_tracks || []) {
-      const trackUrl = https(track.playlist_url);
+    const tracks = (option.audio_tracks || []).slice().sort((a, b) => {
+      const ea = String(a.language_code || "").toLowerCase().startsWith("es") ? 0 : 1;
+      const eb = String(b.language_code || "").toLowerCase().startsWith("es") ? 0 : 1;
+      return ea - eb;
+    });
+    for (const track of tracks) {
+      const trackUrl = playlist(track.playlist_url);
       if (!trackUrl) continue;
       const lang = String(track.language_code || "und").slice(0, 16);
-      const label = String(track.display_name || "").slice(0, 40);
-      audioTracks.push(label ? { lang, url: trackUrl, label } : { lang, url: trackUrl });
+      const label = String(track.display_name || "Audio " + (audioTracks.length + 1)).slice(0, 40);
+      audioTracks.push({ lang, url: trackUrl, label });
       if (audioTracks.length >= 8) break;
     }
   }
 
   const subtitles = [];
   for (const track of option.subtitles || []) {
-    const trackUrl = https(track.url);
+    const trackUrl = media(track.url);
     if (!trackUrl) continue;
     subtitles.push({ lang: String(track.language_code || "und").slice(0, 16), url: trackUrl, format: "vtt" });
     if (subtitles.length >= 30) break;
   }
 
-  const stream = { mime: "application/vnd.apple.mpegurl", headers, subtitles, audioTracks };
+  const label = (chosen.cat + " · " + (option.name || "Servidor")).slice(0, 40);
+  const stream = { url, headers, label, subtitles, audioTracks };
   if (alternatives.length) stream.alternatives = alternatives;
-  log("resolve: video=" + url + " audios=" + audioTracks.length);
+  log("resolve: video=" + url + " audios=" + audioTracks.length + " subs=" + subtitles.length);
+  return stream;
+}
 
-  // El master cosido solo si el ajuste está encendido: como url, Kino lo rechaza.
-  if (setting("mix", false) === true && audioTracks.length) {
-    try {
-      const glued = await master(url, audioTracks, headers);
-      if (glued) {
-        log("master listo: " + glued.length + "B audios=" + audioTracks.length);
-        return { ...stream, url: "data:application/vnd.apple.mpegurl;charset=utf-8," + encodeURIComponent(glued) };
-      }
-      log("el video ya trae audio");
-    } catch (error) {
-      log("master falló (" + String(error.message || error).slice(0, 60) + "): video + audioTracks");
+// ── Pantalla ─────────────────────────────────────────────────────────────────
+async function detail(ref) {
+  const [id, path] = splitRef(ref);
+  const kind = AS_SERIES.has(path.split("/")[1] || "") ? "series" : "movie";
+  const info = { id: (kind === "series" ? "s" : "m") + id, kind, ref, title: "Kimera", poster: undefined, synopsis: "", episodes: [] };
+  if (kind === "series") {
+    const r = await episodes(ref);
+    info.title = r.series.title;
+    info.poster = r.series.poster;
+    info.episodes = r.episodes.slice(0, 80).map((e) => ({ season: e.season, number: e.number, ref: e.ref, title: e.title }));
+    info.total = r.episodes.length;
+    return info;
+  }
+  const answer = await kino.fetch(BASE + path, { headers: HEADERS });
+  if (answer.ok) {
+    const data = json(await body(answer), "content-data");
+    if (data && data.title) {
+      info.title = decode(data.title.name).slice(0, 200) || info.title;
+      info.poster = media(data.title.cover_url);
+      info.synopsis = decode(String(data.title.description || "")).slice(0, 600);
     }
   }
-  return { ...stream, url };
+  return info;
+}
+
+function playArg(info, episode) {
+  const arg = { ref: episode ? episode.ref : info.ref, kind: info.kind, id: info.id, title: info.title };
+  return arg;
+}
+
+function loaded(info) {
+  const out = [];
+  if (info.poster) out.push({ type: "Image", url: info.poster, alt: info.title, height: 220 });
+  out.push({ type: "Text", text: info.title, maxLines: 3, canRequestFocus: true });
+  out.push({
+    type: "Text",
+    text: info.kind === "series" ? t("Serie", "Series") : t("Película", "Movie"),
+    canRequestFocus: true,
+  });
+  if (info.synopsis) out.push({ type: "Text", text: info.synopsis, maxLines: 6, canRequestFocus: true });
+  out.push({
+    type: "Row",
+    children: [
+      { type: "ElevatedButton", labelText: t("Reproducir", "Play"), labelTextEn: "Play", icon: "play", onPressed: { go: { play: playArg(info) } } },
+      { type: "OutlinedButton", labelText: t("Compartir", "Share"), labelTextEn: "Share", icon: "share", onPressed: { event: "share" } },
+    ],
+  });
+  if (info.episodes.length) {
+    out.push({ type: "Text", text: t("Episodios", "Episodes"), canRequestFocus: true });
+    for (const ep of info.episodes) {
+      out.push({
+        type: "ListTile",
+        title: { type: "Text", text: ep.title },
+        subtitle: { type: "Text", text: "T" + ep.season + " · E" + ep.number },
+        trailing: { type: "IconButton", icon: "play", labelText: t("Reproducir", "Play"), labelTextEn: "Play", onPressed: { go: { play: playArg(info, ep) } } },
+        onTap: { go: { play: playArg(info, ep) } },
+      });
+    }
+  }
+  return out;
+}
+
+export async function screen({ state, route }) {
+  await null;
+  const info = state && state.data;
+  const title = (info && info.title) || "Kimera";
+  return {
+    type: "Scaffold",
+    appBar: {
+      type: "AppBar",
+      mergeWithKinoBar: true,
+      dense: true,
+      title,
+      leading: { type: "IconButton", icon: "close", labelText: t("Cerrar", "Close"), labelTextEn: "Close", onPressed: { close: true } },
+    },
+    body: {
+      type: "SingleChildScrollView",
+      children: info ? loaded(info) : [{ type: "Skeleton", height: 220 }, { type: "Skeleton" }, { type: "Skeleton" }],
+    },
+  };
+}
+
+export async function screenEvent({ name, state, route }) {
+  await null;
+  const info = state && state.data;
+  const ref = (route && route.args && route.args.ref) || (state && state.ref) || "";
+
+  if (name === "open") {
+    if (!ref) return { state: { data: { kind: "movie", title: "Kimera", episodes: [] } } };
+    try {
+      return { state: { ref, data: await detail(ref) } };
+    } catch (error) {
+      log("pantalla: " + (error.message || error));
+      return { toast: t("No se pudo abrir la ficha", "Could not open the title") };
+    }
+  }
+
+  if (name === "share") {
+    if (!info) return { toast: t("Todavía está cargando", "Still loading") };
+    if (!kino.plugins) return { toast: t("Actualiza Kino para compartir", "Update Kino to share") };
+    try {
+      const answer = await kino.plugins.call("social", "share", {
+        text: t("Te recomiendo «" + info.title + "» en Kimera", "I recommend \"" + info.title + "\" on Kimera"),
+        title: { kind: info.kind === "series" ? "series" : "movie" },
+        from: "kimera",
+      });
+      if (answer && answer.provider_missing) return { go: { installPlugin: { repo: SOCIAL } } };
+      return { toast: t("El borrador te espera en Kino Social", "Your draft waits in Kino Social") };
+    } catch (error) {
+      log("compartir: " + (error.message || error));
+      return { toast: t("No se pudo abrir Kino Social", "Could not open Kino Social") };
+    }
+  }
+
+  return null;
 }
