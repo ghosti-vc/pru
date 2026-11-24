@@ -1,17 +1,27 @@
 {
   "id": "sololatino",
   "name": "SoloLatino",
-  "description": "Películas, series, anime y doramas en español latino.",
-  "version": "1.0.5",
+  "description": "Pel\u00edculas, series, anime y doramas en espa\u00f1ol latino.",
+  "version": "1.0.6",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
   "author": "ghosti-vc",
-  "capabilities": ["home", "search", "browse", "episodes", "resolve"],
+  "capabilities": [
+    "home",
+    "search",
+    "browse",
+    "episodes",
+    "resolve"
+  ],
   "browser": "pages",
   "fetchHosts": "any",
   "streamHosts": "any",
-  "categories": ["movies", "series", "anime"],
+  "categories": [
+    "movies",
+    "series",
+    "anime"
+  ],
   "hosts": [
     "sololatino.co",
     "sololatino.net",
