@@ -1,5 +1,5 @@
 // SoloLatino para Kino — películas, series, anime y doramas en español latino.
-// Un solo archivo, sin import.
+// El sitio está detrás de Cloudflare: las páginas se leen con el navegador oculto.
 
 const BASE = "https://sololatino.net";
 const UA =
@@ -42,44 +42,35 @@ async function rawFetch(url, opts) {
   return { status: res.status, text, url: res.url || url };
 }
 
-async function getHtml(url) {
-  const seen = [];
-  const tries = [
-    { minimal: false },
-    { minimal: true, headers: { referer: BASE + "/" } },
-    { minimal: false, headers: { referer: BASE + "/" } },
-  ];
-  let notFound = false;
-  let rateLimited = false;
-  for (const variant of tries) {
-    let r = null;
+// El navegador oculto primero; kino.fetch solo como respaldo.
+async function pageHtml(url, timeoutMs) {
+  if (kino.browser && typeof kino.browser.page === "function") {
     try {
-      r = await rawFetch(url, variant);
-    } catch (e) {
-      seen.push((e && e.code) || "network");
-      continue;
-    }
-    seen.push(String(r.status));
-    if (r.status === 404) {
-      notFound = true;
-      break;
-    }
-    if (r.status === 429) {
-      rateLimited = true;
-      break;
-    }
-    if (r.status < 400) return r;
+      const p = await kino.browser.page(url, { timeoutMs: timeoutMs || 12000 });
+      if (p && p.html && String(p.html).length > 500) return p.html;
+    } catch (e) {}
   }
-  const trail = seen.join(",");
-  if (notFound) {
+  const r = await rawFetch(url);
+  if (r.status === 404) {
     throw kino.error("not_found", "http 404", {
       userMessage: t("Ese título ya no está en el sitio.", "That title is gone from the site."),
     });
   }
-  if (rateLimited) throw kino.error("rate_limited", "http 429 (" + trail + ")");
-  throw kino.error("unavailable", "http " + seen[seen.length - 1] + " (" + trail + ")", {
-    userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
-  });
+  if (r.status >= 400) {
+    throw kino.error("unavailable", "http " + r.status, {
+      userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
+    });
+  }
+  return r.text;
+}
+
+function cookieGet(url, name) {
+  try {
+    if (kino.cookies && typeof kino.cookies.get === "function") {
+      return kino.cookies.get(url, name) || "";
+    }
+  } catch (e) {}
+  return "";
 }
 
 // ---------- texto ----------
@@ -113,7 +104,6 @@ function firstMatch(re, s) {
   return m ? m[1] : "";
 }
 
-// id válido para Kino: nada de "/"
 function slugOf(path) {
   return String(path).replace(/^\//, "").replace(/[^A-Za-z0-9._~-]+/g, "_").slice(0, 128);
 }
@@ -172,52 +162,46 @@ function hasNext(html) {
   return /rel="next"/.test(html);
 }
 
-// ---------- filas ----------
-const ROWS = [
-  { id: "movies", genre: "peliculas", path: "/peliculas", title: "Películas recientes", titleEn: "Recent movies" },
-  { id: "series", genre: "series", path: "/series", title: "Series", titleEn: "Series" },
-  { id: "anime", genre: "anime", path: "/animes", title: "Anime", titleEn: "Anime" },
-  { id: "doramas", genre: "doramas", path: "/doramas", title: "Doramas", titleEn: "Dramas" },
-  { id: "accion", genre: "accion", path: "/genero/accion", title: "Acción", titleEn: "Action" },
-  { id: "terror", genre: "terror", path: "/genero/terror", title: "Terror", titleEn: "Horror" },
+// ---------- filas de la portada ----------
+const HOME_ROWS = [
+  { id: "movies", genre: "peliculas", ref: "/peliculas", title: "Películas recientes", titleEn: "Recent movies" },
+  { id: "series", genre: "series", ref: "/series", title: "Series", titleEn: "Series" },
+  { id: "anime", genre: "anime", ref: "/animes", title: "Anime", titleEn: "Anime" },
+  { id: "doramas", genre: "doramas", ref: "/doramas", title: "Doramas", titleEn: "Dramas" },
+  { id: "kids", genre: "infantil", ref: "/genero/kids", title: "Infantil", titleEn: "Kids" },
 ];
-
-async function listPage(path) {
-  const r = await getHtml(abs(path));
-  return { items: parseCards(r.text), hasNext: hasNext(r.text) };
-}
 
 // ---------- home ----------
 export async function home() {
   await kino.sleep(0);
-  const results = await Promise.all(
-    ROWS.map((row) =>
-      listPage(row.path).catch((e) => ({
-        items: [],
-        error: (e && (e.message || e.code)) || "error",
-      }))
-    )
-  );
+  let html = "";
+  try {
+    html = await pageHtml(BASE + "/", 14000);
+  } catch (e) {
+    throw kino.error("unavailable", "portada " + ((e && e.code) || "error"), {
+      userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
+    });
+  }
+  const items = parseCards(html);
+  if (!items.length) {
+    throw kino.error("unavailable", "portada sin tarjetas", {
+      userMessage: t("El sitio cambió o no respondió. Prueba más tarde.", "The site changed or did not answer. Try later."),
+    });
+  }
   const rows = [];
-  const reasons = [];
-  for (let i = 0; i < ROWS.length; i++) {
-    const row = ROWS[i];
-    const got = results[i];
-    if (!got || !got.items.length) {
-      reasons.push(row.id + "=" + (got && got.error ? got.error : "vacio"));
-      continue;
-    }
+  for (const row of HOME_ROWS) {
+    const got = items.filter((it) => it.genres[0] === row.genre).slice(0, 30);
+    if (!got.length) continue;
     rows.push({
       id: row.id,
       title: t(row.title, row.titleEn),
       genre: row.genre,
-      ref: row.path,
-      items: got.items.slice(0, 60),
+      ref: row.ref,
+      items: got,
     });
   }
-  kino.log("home filas=" + rows.length + " " + reasons.join(" ").slice(0, 160));
   if (!rows.length) {
-    throw kino.error("unavailable", reasons.join(" | ").slice(0, 200), {
+    throw kino.error("unavailable", "sin filas", {
       userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
     });
   }
@@ -231,8 +215,8 @@ export async function search(query, opts) {
   if (!q) return { items: [] };
   const page = Number((opts && opts.page) || 1);
   const path = "/buscar?q=" + encodeURIComponent(q) + (page > 1 ? "&page=" + page : "");
-  const r = await getHtml(abs(path));
-  return { items: parseCards(r.text).slice(0, 100), hasNext: hasNext(r.text) };
+  const html = await pageHtml(abs(path), 12000);
+  return { items: parseCards(html).slice(0, 100), hasNext: hasNext(html) };
 }
 
 // ---------- ver más ----------
@@ -241,15 +225,14 @@ export async function browse(ref, opts) {
   const page = Number((opts && opts.page) || 1);
   const p = String(ref || "/peliculas");
   const withPage = page > 1 ? p + (p.includes("?") ? "&" : "?") + "page=" + page : p;
-  const r = await getHtml(abs(withPage));
-  return { items: parseCards(r.text).slice(0, 100), hasNext: hasNext(r.text) };
+  const html = await pageHtml(abs(withPage), 12000);
+  return { items: parseCards(html).slice(0, 100), hasNext: hasNext(html) };
 }
 
 // ---------- episodios ----------
 export async function episodes(ref) {
   await kino.sleep(0);
-  const r = await getHtml(abs(ref));
-  const html = r.text;
+  const html = await pageHtml(abs(ref), 14000);
   const items = [];
   const panels = html.split(/data-season-panel="(\d+)"/);
   for (let i = 1; i < panels.length; i += 2) {
@@ -312,14 +295,24 @@ async function playerUrl(token, pageUrl, csrf) {
   };
   if (csrf) headers["x-csrf-token"] = csrf;
   const body = JSON.stringify({ token, player_token: token, _token: csrf || undefined });
+
   let r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
   if (r.status === 419) {
     try {
       await rawFetch(origin + "/sanctum/csrf-cookie", { minimal: true });
     } catch (e) {}
+    const xsrf = cookieGet(origin + "/", "XSRF-TOKEN");
+    if (xsrf) {
+      let decoded = xsrf;
+      try {
+        decoded = decodeURIComponent(xsrf);
+      } catch (e) {}
+      headers["x-xsrf-token"] = decoded;
+    }
     r = await rawFetch(origin + "/api/player-url", { method: "POST", headers, body });
   }
   if (r.status >= 400) throw kino.error("unavailable", "player-url " + r.status);
+
   let url = "";
   try {
     const j = JSON.parse(r.text);
@@ -498,23 +491,51 @@ async function oneServer(token, pageUrl, csrf) {
   return { url, mime: mimeOf(url), headers: { Referer: referer } };
 }
 
+// ---------- respaldo: el navegador hace todo ----------
+async function captureMedia(pageUrl) {
+  if (!kino.browser || typeof kino.browser.capture !== "function") return null;
+  try {
+    const res = await kino.browser.capture(pageUrl, {
+      timeoutMs: 24000,
+      autoplay: true,
+      headers: { referer: BASE + "/" },
+    });
+    const m = res && res.media && res.media[0];
+    if (!m || !m.url) return null;
+    return {
+      url: m.url,
+      mime: m.mime || mimeOf(m.url),
+      headers: m.headers || { Referer: BASE + "/" },
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // ---------- resolve ----------
 export async function resolve(ref) {
   await kino.sleep(0);
   const raw = String(ref || "");
 
+  // alternativa: "<ruta>|<token>"
   const bar = raw.indexOf("|");
   if (bar > 0) {
     const pageUrl = abs(raw.slice(0, bar));
     const token = raw.slice(bar + 1);
-    const r = await getHtml(pageUrl);
-    return oneServer(token, pageUrl, csrfOf(r.text));
+    const html = await pageHtml(pageUrl, 14000);
+    try {
+      return await oneServer(token, pageUrl, csrfOf(html));
+    } catch (e) {
+      const cap = await captureMedia(pageUrl);
+      if (cap) return cap;
+      throw e;
+    }
   }
 
   const pageUrl = abs(raw);
-  const r = await getHtml(pageUrl);
-  const csrf = csrfOf(r.text);
-  const servers = parseServers(r.text);
+  const html = await pageHtml(pageUrl, 16000);
+  const csrf = csrfOf(html);
+  const servers = parseServers(html);
   if (!servers.length) {
     throw kino.error("not_found", "sin servidores", {
       userMessage: t("Este título no tiene servidores disponibles.", "This title has no servers available."),
@@ -527,13 +548,14 @@ export async function resolve(ref) {
 
   let first = null;
   let usedToken = "";
-  for (const s of ordered.slice(0, 3)) {
+  for (const s of ordered.slice(0, 2)) {
     try {
       first = await oneServer(s.token, pageUrl, csrf);
       usedToken = s.token;
       break;
     } catch (e) {}
   }
+  if (!first) first = await captureMedia(pageUrl);
   if (!first) {
     throw kino.error("unavailable", "todos", {
       userMessage: t("Ningún servidor respondió. Prueba otro título.", "No server answered. Try another title."),
