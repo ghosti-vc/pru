@@ -1,13 +1,13 @@
-// Kino plugin: Kimera (kimeraweb.com).
-// El sitio sirve el video SIN audio y cada idioma en su propio playlist HLS. resolve() arma un
-// master con EXT-X-MEDIA para que el reproductor reciba imagen y sonido juntos; con el ajuste
-// "mix" apagado entrega el video y los idiomas como audioTracks.
+// Kino plugin: Kimera (kimeraweb.com) — películas y series.
+// El sitio sirve el video sin audio y cada idioma en su propio playlist HLS. resolve() arma un
+// master con EXT-X-MEDIA para que el reproductor reciba video y audio juntos; si el ajuste
+// "mix" está apagado, entrega el video y los idiomas como audioTracks.
 
 const BASE = "https://kimeraweb.com";
 const CDN = "https://cloudcdn.sbs";
-const SOCIAL = "kinotvapp/kino-social";
 const TYPES = "movies|series|dramas|animes|donghuas|shorts";
 const AS_SERIES = new Set(["series", "dramas", "animes", "donghuas", "shorts"]);
+const SOCIAL = "kinotvapp/kino-social";
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
   Accept: "text/html,application/xhtml+xml",
@@ -16,24 +16,15 @@ const HEADERS = {
 const LINK = new RegExp('(?:href|data-href)="(?:https?:\\/\\/kimeraweb\\.com)?\\/(' + TYPES + ')\\/([^"]+)"', "gi");
 const BARE = new RegExp('\\/(' + TYPES + ')\\/([a-z0-9][a-z0-9-]*-\\d+)', "gi");
 
-function log(...args) {
-  try {
-    kino.log(...args);
-  } catch {
-    // el registro se pierde, el resultado no
-  }
-}
-
 function t(es, en) {
   return String(kino.lang || "es").toLowerCase().startsWith("en") ? en : es;
 }
 
-function setting(key, fallback) {
+function log(...args) {
   try {
-    const value = typeof kino.config.get === "function" ? kino.config.get(key) : kino.config[key];
-    return value === undefined || value === null ? fallback : value;
+    kino.log(...args);
   } catch {
-    return fallback;
+    // la línea se pierde, el resultado no
   }
 }
 
@@ -69,13 +60,6 @@ function https(value) {
   let url = String(value || "");
   if (url.startsWith("/")) url = CDN + url;
   return url.startsWith(CDN + "/") ? url : undefined;
-}
-
-function absUrl(base, ref) {
-  if (/^https?:\/\//i.test(ref)) return ref;
-  const origin = (/^(https?:\/\/[^\/]+)/i.exec(base) || [])[1] || "";
-  if (ref.startsWith("/")) return origin + ref;
-  return base.replace(/[?#].*$/, "").replace(/[^\/]*$/, "") + ref;
 }
 
 function escapeRegExp(value) {
@@ -236,6 +220,7 @@ export async function home() {
     if (items.length) rows.push({ id: "todo", title: "Kimera", genre: "otros", items });
   }
   if (!rows.length) throw kino.error("unavailable", "home vacío len=" + html.length);
+  for (const row of rows) opens(row.items);
   log("home: filas=" + rows.length);
   return rows;
 }
@@ -381,6 +366,13 @@ async function firstEpisode(id) {
 }
 
 // ── Reproducción ─────────────────────────────────────────────────────────────
+function absUrl(base, ref) {
+  if (/^https?:\/\//i.test(ref)) return ref;
+  const origin = (/^(https?:\/\/[^\/]+)/i.exec(base) || [])[1] || "";
+  if (ref.startsWith("/")) return origin + ref;
+  return base.replace(/[?#].*$/, "").replace(/[^\/]*$/, "") + ref;
+}
+
 function absolute(text, base) {
   return String(text)
     .split(/\r?\n/)
@@ -413,7 +405,7 @@ async function master(videoUrl, tracks, headers) {
       const name = String(track.label || "Audio " + (i + 1)).replace(/["\\]/g, "").slice(0, 40) || "Audio";
       media.push(
         '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="ka",NAME="' + name + '",LANGUAGE="' + lang +
-        '",DEFAULT=' + (i === 0 ? "YES" : "NO") + ",AUTOSELECT=YES,URI=\"" + track.url + '"'
+        '",DEFAULT=' + (i === 0 ? "YES" : "NO") + ',AUTOSELECT=YES,URI="' + track.url + '"'
       );
     } catch (error) {
       log("audio " + i + " descartado: " + String(error.message || error).slice(0, 60));
@@ -431,6 +423,15 @@ async function master(videoUrl, tracks, headers) {
     out.push('#EXT-X-STREAM-INF:BANDWIDTH=4000000,AUDIO="ka"', videoUrl);
   }
   return out.join("\n");
+}
+
+function setting(key, fallback) {
+  try {
+    const v = typeof kino.config.get === "function" ? kino.config.get(key) : kino.config[key];
+    return v === undefined || v === null ? fallback : v;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function resolve(ref) {
@@ -564,7 +565,8 @@ function shareSheet(state) {
 }
 
 function rail(row) {
-  return { type: "titleRail", key: "rail-" + row.id, title: row.title, items: row.items.slice(0, 30), size: "small" };
+  const items = row.items.slice(0, 30).map((item) => ({ ...item, onTap: { event: "openItem", arg: item.ref } }));
+  return { type: "titleRail", key: "rail-" + row.id, title: row.title, items, size: "small" };
 }
 
 export async function screen({ state = {}, route }) {
@@ -589,7 +591,7 @@ export async function screen({ state = {}, route }) {
         autofocus: true, onPressed: { event: "play", arg: item.ref },
       });
       const extra = [];
-      if (state.tmdb > 0) extra.push({ type: "Button", variant: "secondary", icon: "share", labelText: "Compartir", labelTextEn: "Share", devices: ["phone"], onPressed: { event: "shareOpen" } });
+      if (state.tmdb > 0) extra.push({ type: "TextButton", icon: "share", labelText: "Compartir", labelTextEn: "Share", devices: ["phone"], onPressed: { event: "shareOpen" } });
       extra.push({ type: "TextButton", icon: "info", labelText: "Ver ficha en Kino", labelTextEn: "Open in Kino", onPressed: { event: "kinoTitle", arg: item.ref } });
       children.push({ type: "Row", wrap: true, gap: 8, children: extra });
       if (state.episodes && state.episodes.length) {
@@ -604,8 +606,6 @@ export async function screen({ state = {}, route }) {
       }
     }
     const tree = PAGE(bar(t("Ficha", "Details"), "Details", BACK), children);
-    tree.floatingActionButton = null;
-    delete tree.floatingActionButton;
     if (state.shareOpen) tree.body.children[0].children.push(shareSheet(state));
     return tree;
   }
@@ -677,13 +677,24 @@ async function loadDetail(ref) {
   return out;
 }
 
-export async function screenEvent({ name, arg, value, state = {}, route }) {
+export async function screenEvent({ name, arg, value, state = {}, route, installed = {} }) {
   if (name === "open") {
-    if (route && route.name === "detail") {
-      const ref = (route.args && route.args.ref) || "";
-      const data = await loadDetail(ref);
-      return { state: { ...data, shareOpen: false } };
+    const asked = (route && ((route.args && route.args.ref) || (route.params && route.params.ref))) || state.ref || "";
+    const onDetail = Boolean(route && route.name === "detail");
+    if (asked && (!onDetail || !state.item)) {
+      try {
+        const data = await loadDetail(asked);
+        const patch = { state: { ...data, ref: asked, shareOpen: false } };
+        if (!onDetail) patch.route = { push: "detail", params: { ref: asked } };
+        return patch;
+      } catch (error) {
+        log("detail falló " + asked + " " + String((error && error.code) || error).slice(0, 60));
+        const patch = { state: { ref: asked, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") } };
+        if (!onDetail) patch.route = { push: "detail", params: { ref: asked } };
+        return patch;
+      }
     }
+    if (onDetail) return null;
     if (state.rows) return null;
     try {
       const rows = await home();
@@ -701,20 +712,37 @@ export async function screenEvent({ name, arg, value, state = {}, route }) {
     const q = String(value || "").trim();
     if (!q) return { state: { query: null, results: [] } };
     const found = await search(q);
-    const items = found.slice(0, 60).map((x) => ({ ...x, open: { screen: { args: { ref: x.ref } } } }));
+    const items = found.slice(0, 60).map((x) => ({
+      ...x,
+      open: { screen: { args: { ref: x.ref } } },
+      onTap: { event: "openItem", arg: x.ref },
+    }));
     return { state: { query: q, results: items, searching: false } };
   }
 
   if (name === "openItem") {
-    return { route: { push: "detail", params: { ref: String(arg || "") } } };
+    const ref = String(arg || "");
+    log("abrir " + ref);
+    try {
+      const data = await loadDetail(ref);
+      return { state: { ...data, ref, shareOpen: false }, route: { push: "detail", params: { ref } } };
+    } catch (error) {
+      log("detail falló " + ref + " " + String((error && error.code) || error).slice(0, 60));
+      return { state: { ref, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") }, route: { push: "detail", params: { ref } } };
+    }
   }
 
   if (name === "back") return { route: { pop: true } };
 
   if (name === "retry") {
-    const ref = (route && route.args && route.args.ref) || "";
-    const data = await loadDetail(ref);
-    return { state: { ...data, shareOpen: false } };
+    const ref = (route && ((route.args && route.args.ref) || (route.params && route.params.ref))) || state.ref || "";
+    try {
+      const data = await loadDetail(ref);
+      return { state: { ...data, ref, shareOpen: false, error: null } };
+    } catch (error) {
+      log("detail falló " + ref);
+      return { state: { ref, item: null, error: t("No se pudo abrir la ficha", "Could not open the page") } };
+    }
   }
 
   if (name === "play") {
@@ -741,16 +769,16 @@ export async function screenEvent({ name, arg, value, state = {}, route }) {
   if (name === "shareSend") {
     const form = value && typeof value === "object" ? value : {};
     const inputs = state.inputs || {};
-    const text = String(form.shareText ?? inputs.shareText ?? state.shareText ?? "").slice(0, 500);
+    const shareText = String(form.shareText ?? inputs.shareText ?? state.shareText ?? "").slice(0, 500);
     const attach = form.shareAttach ?? inputs.shareAttach ?? state.attach;
-    if (!text && !(attach && state.tmdb > 0)) {
+    if (!shareText && !(attach && state.tmdb > 0)) {
       return { toast: t("Escribe algo antes de enviar", "Write something before sending") };
     }
     if (typeof kino.plugins !== "object" || !kino.plugins) {
       return { ui: [{ close: "share" }], toast: t("Actualiza Kino para compartir en Kino Social", "Update Kino to share to Kino Social") };
     }
     const item = state.item || {};
-    const payload = { text, from: "Kimera" };
+    const payload = { text: shareText, from: "Kimera" };
     if (attach && state.tmdb > 0) payload.title = { kind: item.kind === "series" ? "series" : "movie", tmdb: state.tmdb };
     try {
       await kino.plugins.call("social", "share", payload);
@@ -758,8 +786,7 @@ export async function screenEvent({ name, arg, value, state = {}, route }) {
     } catch (error) {
       const code = String((error && error.code) || "");
       if (code === "provider_missing") {
-        const installed = (state.installed && state.installed[SOCIAL]) === true;
-        if (!installed) return { go: { installPlugin: { repo: SOCIAL } } };
+        if (installed[SOCIAL] !== true) return { go: { installPlugin: { repo: SOCIAL } } };
         return { toast: t("Kino Social está apagado o le falta configurarse", "Kino Social is off or needs setting up") };
       }
       if (code === "not_declared") return { toast: t("Actualiza Kino Social", "Update Kino Social") };
@@ -768,4 +795,4 @@ export async function screenEvent({ name, arg, value, state = {}, route }) {
   }
 
   return null;
-} 
+}
