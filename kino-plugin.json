@@ -1,7 +1,7 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
