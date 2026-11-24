@@ -1,7 +1,7 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -19,7 +19,7 @@
       "type": "toggle",
       "label": "Coser el audio en un master",
       "default": false,
-      "hint": "Déjalo apagado si el audio ya suena. Enciéndelo solo para probar el master cosido."
+      "hint": "Apagado: video y audio aparte. Enciéndelo solo para probar."
     }
   ],
   "enhancements": {
