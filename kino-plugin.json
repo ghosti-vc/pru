@@ -1,8 +1,8 @@
 {
   "id": "kimera",
   "name": "Kimera",
-  "version": "0.3.0",
-  "apiVersion": 6,
+  "version": "0.3.1",
+  "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
   "author": "ghosti-vc",
@@ -12,14 +12,12 @@
   "hosts": ["kimeraweb.com", "cloudcdn.sbs"],
   "streamHosts": "any",
   "capabilities": ["home", "browse", "search", "episodes", "resolve", "download", "screen"],
+  "screen": {
+    "label": "Kimera",
+    "icon": "movie"
+  },
   "recommends": ["kinotvapp/kino-social"],
   "enhancements": {
-    "14": {
-      "screen": {
-        "label": "Kimera",
-        "icon": "movie"
-      }
-    },
     "20": {
       "consumes": {
         "social": {
