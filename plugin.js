@@ -129,6 +129,13 @@ function hasBrowser() {
   return typeof kino.browser !== "undefined" && kino.browser && typeof kino.browser.page === "function";
 }
 
+const CHECK_RE = /just a moment|cf-chl|challenge-platform|cf-turnstile|g-recaptcha|h-captcha|checking your browser|verifying you are human|attention required/i;
+
+function isCheck(html) {
+  const h = String(html || "");
+  return h.length < 60000 && CHECK_RE.test(h);
+}
+
 async function readPage(pathOrUrl, opts) {
   const o = opts || {};
   const first = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : abs(pathOrUrl);
@@ -136,34 +143,41 @@ async function readPage(pathOrUrl, opts) {
   const alt = altOf(first);
   if (alt !== first) urls.push(alt);
   const trail = [];
+  let checked = false;
+  // 1) petición normal (rápida) a cada dirección; 2) navegador solo si hace falta.
   for (const u of urls) {
-    if (hasBrowser()) {
-      try {
-        const pg = await kino.browser.page(u, { timeoutMs: o.timeoutMs || 12000 });
-        if (pg && pg.html && pg.html.length > 500) {
-          return { html: pg.html, url: pg.finalUrl || u, how: "browser" };
-        }
-        trail.push("vacio");
-      } catch (e) {
-        trail.push("nav:" + ((e && e.code) || "error"));
-      }
-    }
     try {
       const r = await req(u);
-      if (r.status === 404) {
-        trail.push("404");
-        continue;
-      }
-      if (r.status < 400 && r.text && r.text.length > 500) {
+      if (r.status === 404) { trail.push(hostOf(u) + ":404"); continue; }
+      if (r.status < 400 && r.text && r.text.length > 500 && !isCheck(r.text)) {
         return { html: r.text, url: u, how: "fetch" };
       }
-      trail.push("http " + r.status);
+      if (isCheck(r.text) || r.status === 403 || r.status === 503) checked = true;
+      trail.push(hostOf(u) + ":http " + r.status + (isCheck(r.text) ? " verificación" : ""));
     } catch (e) {
-      trail.push("net:" + ((e && e.code) || "error"));
+      trail.push(hostOf(u) + ":net " + ((e && e.code) || "error"));
     }
   }
+  if (hasBrowser()) {
+    for (const u of urls) {
+      try {
+        const pg = await kino.browser.page(u, { timeoutMs: o.timeoutMs || 12000 });
+        if (pg && pg.html && pg.html.length > 500 && !isCheck(pg.html)) {
+          return { html: pg.html, url: pg.finalUrl || u, how: "browser" };
+        }
+        trail.push(hostOf(u) + ":nav vacío");
+      } catch (e) {
+        const code = (e && e.code) || "error";
+        if (/block|check/i.test(String((e && e.message) || "") + code)) checked = true;
+        trail.push(hostOf(u) + ":nav " + code);
+      }
+    }
+  }
+  kino.log("sololatino: no se pudo abrir " + first.slice(0, 60) + " -> " + trail.join(" | "));
   throw kino.error("unavailable", trail.join(" | "), {
-    userMessage: t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
+    userMessage: checked
+      ? t("El sitio está pidiendo una verificación (captcha) que Kino no puede resolver. Prueba más tarde.", "The site is asking for a human check that Kino cannot solve. Try later.")
+      : t("El sitio no respondió. Prueba más tarde.", "The site did not answer. Try later."),
   });
 }
 
