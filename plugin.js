@@ -40,16 +40,17 @@ function toItem(m) {
   if (!m) return null;
   const id = m.imdb_id || m.id;
   if (!id || !/^[A-Za-z0-9._~-]{1,128}$/.test(id)) return null;
+  // Campos que entiende Kino: id, ref, title, kind ("movie" | "series"), poster, year (igual que los demás plugins).
   const item = {
     id: id,
     ref: id,
-    type: m.type === "series" ? "series" : "movie",
-    name: m.name || id,
+    kind: m.type === "series" ? "series" : "movie",
+    title: m.name || id,
     ids: { imdb: id },
   };
   if (m.poster) item.poster = m.poster;
   if (m.background) item.backdrop = m.background;
-  if (m.description) item.description = m.description;
+  if (m.description) item.overview = m.description;
   const g = genreOf(m.genre);
   if (g) item.genres = g;
   const year = m.releaseInfo ? parseInt(String(m.releaseInfo).slice(0, 4), 10) : 0;
@@ -68,9 +69,9 @@ function labelOf(s) {
 
 const ROWS = [
   ["peli-top", "movie", "top", "peliculas", "Películas destacadas", "Featured movies"],
-  ["peli-trend", "movie", "tmdb.trending", "peliculas", "Tendencias en películas", "Trending movies"],
+  ["peli-rating", "movie", "imdbRating", "peliculas", "Mejor valoradas", "Top rated movies"],
   ["serie-top", "series", "top", "series", "Series destacadas", "Featured series"],
-  ["serie-trend", "series", "tmdb.trending", "series", "Tendencias en series", "Trending series"],
+  ["serie-rating", "series", "imdbRating", "series", "Series mejor valoradas", "Top rated series"],
   ["accion", "movie", "top/genre=Action", "accion", "Acción", "Action"],
   ["comedia", "movie", "top/genre=Comedy", "comedia", "Comedia", "Comedy"],
   ["drama", "movie", "top/genre=Drama", "drama", "Drama", "Drama"],
@@ -89,13 +90,19 @@ export async function home() {
     if (!items.length) return null;
     return { id: row[0], title: t(row[4], row[5]), genre: row[3], items: items };
   });
-  const out = await Promise.all(jobs.map((j) => j.catch(() => null)));
-  return out.filter(Boolean);
+  const out = await Promise.all(jobs.map((j, i) => j.catch((e) => {
+    kino.log("home: falló " + ROWS[i][0] + " " + String((e && e.message) || e).slice(0, 80));
+    return null;
+  })));
+  const rows = out.filter(Boolean);
+  kino.log("home: " + rows.length + " filas");
+  if (!rows.length) throw kino.error("unavailable", "sin catálogo", { userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now.") });
+  return rows;
 }
 
 export async function search(query) {
   await null;
-  const raw = typeof query === "string" ? query : (query && query.query) || "";
+  const raw = typeof query === "string" ? query : (query && (query.q || query.query || query.text || query.term)) || "";
   const q = String(raw).trim();
   if (!q) return [];
   const enc = encodeURIComponent(q);
@@ -108,6 +115,7 @@ export async function search(query) {
       const d = await getJson(u);
       return (d.metas || []).map(toItem).filter(Boolean);
     } catch (e) {
+      kino.log("búsqueda: falló " + String((e && e.message) || e).slice(0, 80));
       return [];
     }
   }));
@@ -141,11 +149,11 @@ export async function episodes(ref) {
     eps.push({
       id: epRef.replace(/:/g, "-"),
       ref: epRef,
-      name: v.name || t("Episodio", "Episode") + " " + number,
+      title: v.name || v.title || t("Episodio", "Episode") + " " + number,
       season: season,
       number: number,
-      thumbnail: v.thumbnail || undefined,
-      description: v.overview || undefined,
+      poster: v.thumbnail || undefined,
+      overview: v.overview || undefined,
     });
     if (!seasons[season]) {
       seasons[season] = season === 0 ? t("Especiales", "Specials") : t("Temporada", "Season") + " " + season;
@@ -172,7 +180,7 @@ export async function resolve(ref) {
   if (!list.length) {
     throw kino.error("not_found", "sin enlaces", { userMessage: "Este título no tiene enlaces disponibles ahora." });
   }
-  const mk = (s) => ({ url: s.url, mime: "application/vnd.apple.mpegurl", label: labelOf(s) });
+  const mk = (s) => ({ url: s.url, mime: /\.mp4(\?|$)/i.test(s.url) ? "video/mp4" : "application/vnd.apple.mpegurl", label: labelOf(s) });
   const main = mk(list[0]);
   const alts = list.slice(1, 9).map(mk);
   if (alts.length) main.alternatives = alts;
