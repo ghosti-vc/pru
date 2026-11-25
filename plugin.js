@@ -167,6 +167,37 @@ export async function episodes(ref) {
   };
 }
 
+// Cabeceras que el addon pide para abrir el enlace (convención de Stremio: behaviorHints.proxyHeaders.request).
+function headersOf(s) {
+  const bh = (s && s.behaviorHints) || {};
+  const req = bh.proxyHeaders && bh.proxyHeaders.request;
+  const out = {};
+  if (req && typeof req === "object") {
+    for (const k of Object.keys(req)) if (typeof req[k] === "string") out[k] = req[k];
+  }
+  return out;
+}
+
+function hostOf(u) {
+  const m = /^https?:\/\/([^\/?#]+)/i.exec(String(u || ""));
+  return m ? m[1].toLowerCase() : "";
+}
+
+const isHls = (u) => !/\.(mp4|mkv|webm)(\?|$)/i.test(String(u || ""));
+
+// Abre el manifiesto con las mismas cabeceras y comprueba que sea un .m3u8 de verdad.
+async function check(c) {
+  if (!isHls(c.url)) return { ok: true, why: "mp4" };
+  try {
+    const r = await kino.fetch(c.url, { headers: Object.assign({ Accept: "*/*" }, c.headers || {}), timeoutMs: 7000 });
+    if (!r.ok) return { ok: false, why: "http " + r.status };
+    const t = String(await r.text()).slice(0, 400);
+    return /#EXTM3U/.test(t) ? { ok: true, why: "m3u8" } : { ok: false, why: "no es m3u8: " + t.replace(/\s+/g, " ").slice(0, 40) };
+  } catch (e) {
+    return { ok: false, why: "error " + String((e && e.code) || (e && e.message) || e).slice(0, 30) };
+  }
+}
+
 export async function resolve(ref) {
   await null;
   const parts = String(ref || "").split(":");
@@ -174,15 +205,41 @@ export async function resolve(ref) {
   if (!/^tt\d+$/.test(id)) throw kino.error("not_found", "ref " + ref);
   const type = parts.length >= 2 ? "series" : "movie";
   const addonId = type === "series" ? id + ":" + (parts[1] || 1) + ":" + (parts[2] || 1) : id;
-  const data = await getJson(ADDON + "/stream/" + type + "/" + addonId + ".json");
+  let data;
+  try {
+    const r = await kino.fetch(ADDON + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: 12000 });
+    if (!r.ok) throw kino.error("unavailable", "addon http " + r.status);
+    data = await r.json();
+  } catch (e) {
+    if (e && e.code === "unavailable") throw e;
+    throw kino.error("unavailable", "addon " + String((e && e.code) || (e && e.message) || e).slice(0, 40), { userMessage: "El addon de enlaces no respondió a tiempo. Prueba de nuevo." });
+  }
   const list = (Array.isArray(data.streams) ? data.streams : [])
     .filter((s) => s && typeof s.url === "string" && s.url.indexOf("https://") === 0);
   if (!list.length) {
     throw kino.error("not_found", "sin enlaces", { userMessage: "Este título no tiene enlaces disponibles ahora." });
   }
-  const mk = (s) => ({ url: s.url, mime: /\.mp4(\?|$)/i.test(s.url) ? "video/mp4" : "application/vnd.apple.mpegurl", label: labelOf(s) });
-  const main = mk(list[0]);
-  const alts = list.slice(1, 9).map(mk);
+  const cands = list.slice(0, 8).map((s) => ({
+    url: s.url,
+    mime: /\.mp4(\?|$)/i.test(s.url) ? "video/mp4" : "application/vnd.apple.mpegurl",
+    label: labelOf(s),
+    headers: headersOf(s),
+    hints: Object.keys((s && s.behaviorHints) || {}).join(","),
+  }));
+  // Se prueban a la vez: así se descartan los que dan 403 antes de entregarlos al reproductor.
+  const res = await Promise.all(cands.map((c) => check(c)));
+  res.forEach((r, i) => kino.log("resolve: " + hostOf(cands[i].url) + " " + (r.ok ? "OK " : "NO ") + r.why + " cabeceras=" + Object.keys(cands[i].headers).length + (cands[i].hints ? " hints=" + cands[i].hints : "")));
+  const good = cands.filter((c, i) => res[i].ok);
+  if (!good.length) {
+    throw kino.error("unavailable", "ningún enlace abre (" + res.map((r) => r.why).join(" | ").slice(0, 120) + ")", { userMessage: "Los enlaces de este título rechazan la conexión. Prueba otro título." });
+  }
+  const mk = (c) => {
+    const o = { url: c.url, mime: c.mime, label: c.label };
+    if (Object.keys(c.headers).length) o.headers = c.headers;
+    return o;
+  };
+  const main = mk(good[0]);
+  const alts = good.slice(1).map(mk);
   if (alts.length) main.alternatives = alts;
   return main;
 }
