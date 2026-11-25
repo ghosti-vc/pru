@@ -1,7 +1,7 @@
 {
   "id": "pelistube",
   "name": "Pelistube",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
