@@ -942,15 +942,21 @@ async function acResolve(id, season, ep, deadline) {
   const kind = type === "series" ? "series" : "movie";
   const pool = items.filter((it) => it.kind === kind && normTitle(it.title) === want);
   const pick = pool.find((it) => year && it.year === year) || pool.find((it) => !year || !it.year || Math.abs(it.year - year) <= 1) || null;
-  if (!pick) { kino.log("respaldo AllCalidad: no encontré '" + title.slice(0, 30) + "'"); return null; }
-  let spec = "m|" + pick.ref.split("|")[2];
-  if (type === "series") {
+  const tmdb = parseInt(meta.moviedb_id, 10) || 0;
+  let cands = [];
+  if (!pick) {
+    kino.log("respaldo AllCalidad: no encontré '" + title.slice(0, 30) + "'" + (type === "movie" && tmdb ? ", pruebo el reproductor por TMDB" : ""));
+    if (type !== "movie" || !tmdb) return null;
+    cands = [{ url: "https://videoapp.zip/e/movie/" + tmdb, lang: 0, label: "AllCalidad · videoapp · Latino", referer: AC + "/" }];
+  }
+  let spec = pick ? "m|" + pick.ref.split("|")[2] : "";
+  if (pick && type === "series") {
     const eps = (await acEpisodes(pick.ref.split("|")[2])).episodes;
     const e = eps.find((x) => x.season === season && x.number === ep);
     if (!e) { kino.log("respaldo AllCalidad: sin el episodio " + season + "x" + ep); return null; }
     spec = "e|" + e.ref.split("|")[2];
   }
-  let cands = await acCandidates(spec);
+  if (pick) cands = await acCandidates(spec);
   const bad = /dood|pinup|agl00\d\.com|playmogo|mixdrop|susanexpect|nupload|netu|waaw|hqq/i;
   const usable = cands.filter((c) => !bad.test(hostOf(c.url)));
   if (usable.length) cands = usable;
@@ -991,15 +997,18 @@ export async function resolve(ref) {
   };
   const main = primary(ref, t0);
   main.catch(() => {});
-  // Si el addon principal tarda, el respaldo arranca en paralelo.
-  const first = await Promise.race([main.then(() => "ok", () => "fail"), (typeof kino.sleep === "function" ? kino.sleep(3500) : new Promise(() => {})).then(() => "slow")]);
+  // Si el addon principal tarda, el respaldo arranca en paralelo (a los 3,5 s).
+  const wait = (ms) => (typeof kino.sleep === "function" ? kino.sleep(ms) : new Promise(() => {}));
+  const first = await Promise.race([main.then(() => "ok", () => "fail"), wait(3500).then(() => "slow")]);
+  if (first === "ok") return main;
   if (first === "slow") startAc();
-  try {
-    return await main;
-  } catch (e) {
-    kino.log("addon principal sin video (" + String((e && e.message) || e).slice(0, 50) + "): pruebo AllCalidad");
-    const v = await startAc();
-    if (v) return v;
-    throw e;
-  }
+  // Gana el primero que entregue video: el respaldo no espera a que el addon agote su tiempo.
+  const mainP = main.then((v) => ({ v, from: "main" }), (e) => ({ e, from: "main" }));
+  let res = await Promise.race([mainP, first === "slow" ? startAc().then((v) => ({ v, from: "ac" })) : mainP]);
+  if (res.from === "ac" && !res.v) res = await mainP;
+  if (res.v) return res.v;
+  kino.log("addon principal sin video (" + String((res.e && res.e.message) || res.e).slice(0, 50) + "): pruebo AllCalidad");
+  const v = await startAc();
+  if (v) return v;
+  throw res.e || kino.error("unavailable", "sin video");
 }
