@@ -1,20 +1,30 @@
-
 {
   "id": "peliskronos",
   "name": "PELISKronos",
-  "version": "0.1.0",
-  "apiVersion": 6,
+  "version": "0.1.1",
+  "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
   "author": "Ghosti-vc",
   "description": "Películas y series con enlaces en español, sin cuenta.",
-  "categories": ["movies", "series"],
+  "categories": [
+    "movies",
+    "series"
+  ],
   "hosts": [
     "v3-cinemeta.strem.io",
     "cinemeta-catalogs.strem.io",
+    "images.metahub.space",
+    "*.metahub.space",
     "addons.4rever.cc",
     "vimeos.net",
     "*.vimeos.net"
   ],
-  "capabilities": ["search", "home", "episodes", "resolve"]
+  "streamHosts": "any",
+  "capabilities": [
+    "search",
+    "home",
+    "episodes",
+    "resolve"
+  ]
 }
