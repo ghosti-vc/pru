@@ -374,59 +374,95 @@ function ctrDecrypt(key, iv, data) {
 
 /* ---------- prueba de trabajo del reproductor ---------- */
 
+const P_R = new Uint32Array(512);
+const P_OUT = new Uint32Array(8);
+const MSG = new Uint8Array(256);
+
 function rotl(x, n) {
   return ((x << n) | (x >>> (32 - n))) >>> 0;
 }
 
-function mix(t) {
-  t[0] = (t[0] + t[1]) >>> 0;
-  t[3] = rotl(t[3] ^ t[0], 16);
-  t[2] = (t[2] + t[3]) >>> 0;
-  t[1] = rotl(t[1] ^ t[2], 12);
-  t[0] = (t[0] + t[1]) >>> 0;
-  t[3] = rotl(t[3] ^ t[0], 8);
-  t[2] = (t[2] + t[3]) >>> 0;
-  t[1] = rotl(t[1] ^ t[2], 7);
-}
-
-function powHash(bytes) {
-  const e = new Uint32Array([1779033703, 3144134277, 1013904242, 2773480762]);
-  for (let i = 0; i < bytes.length; i++) {
-    e[0] = (e[0] + bytes[i]) >>> 0;
-    e[0] = rotl(e[0], 7);
-    mix(e);
+function powHash(bytes, len) {
+  let s0 = 1779033703;
+  let s1 = 3144134277;
+  let s2 = 1013904242;
+  let s3 = 2773480762;
+  const r = P_R;
+  let i;
+  let c;
+  let d;
+  let v;
+  let base;
+  for (i = 0; i < len; i++) {
+    s0 = (s0 + bytes[i]) >>> 0;
+    s0 = rotl(s0, 7);
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 16);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 12);
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 8);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 7);
   }
-  for (let i = 0; i < 8; i++) mix(e);
-  const r = new Uint32Array(512);
-  for (let i = 0; i < 512; i++) {
-    mix(e);
-    r[i] = (e[0] ^ e[2]) >>> 0;
+  for (i = 0; i < 8; i++) {
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 16);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 12);
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 8);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 7);
+  }
+  for (i = 0; i < 512; i++) {
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 16);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 12);
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 8);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 7);
+    r[i] = (s0 ^ s2) >>> 0;
   }
   for (let k = 0; k < 2; k++) {
-    for (let i = 0; i < 512; i++) {
-      const a = r[i] & 511;
-      let c = (r[i] + r[a]) >>> 0;
+    for (i = 0; i < 512; i++) {
+      c = (r[i] + r[r[i] & 511]) >>> 0;
       c = rotl(c, 13);
       c = (c ^ Math.imul(r[(i + 1) & 511], 2654435761)) >>> 0;
       r[i] = c;
-      e[0] = (e[0] ^ c) >>> 0;
-      mix(e);
+      s0 = (s0 ^ c) >>> 0;
+      s0 = (s0 + s1) >>> 0;
+      s3 = rotl(s3 ^ s0, 16);
+      s2 = (s2 + s3) >>> 0;
+      s1 = rotl(s1 ^ s2, 12);
+      s0 = (s0 + s1) >>> 0;
+      s3 = rotl(s3 ^ s0, 8);
+      s2 = (s2 + s3) >>> 0;
+      s1 = rotl(s1 ^ s2, 7);
     }
   }
-  const n = new Uint32Array(8);
-  for (let i = 0; i < 8; i++) {
-    mix(e);
-    let s = e[0];
-    const base = i * 64;
-    for (let c = 0; c < 64; c++) {
-      const d = r[base + c];
-      s = (s + d) >>> 0;
-      s = rotl(s, 5);
-      s = (s ^ Math.imul(d, 2246822519)) >>> 0;
+  for (i = 0; i < 8; i++) {
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 16);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 12);
+    s0 = (s0 + s1) >>> 0;
+    s3 = rotl(s3 ^ s0, 8);
+    s2 = (s2 + s3) >>> 0;
+    s1 = rotl(s1 ^ s2, 7);
+    v = s0;
+    base = i * 64;
+    for (c = 0; c < 64; c++) {
+      d = r[base + c];
+      v = (v + d) >>> 0;
+      v = rotl(v, 5);
+      v = (v ^ Math.imul(d, 2246822519)) >>> 0;
     }
-    n[i] = (s ^ e[2]) >>> 0;
+    P_OUT[i] = (v ^ s2) >>> 0;
   }
-  return n;
+  return P_OUT;
 }
 
 function zeroBits(w) {
@@ -444,15 +480,15 @@ function zeroBits(w) {
 async function solve(nonce, bits, budgetMs) {
   if (!(bits > 0)) return "0";
   const prefix = utf8(nonce + ":");
+  MSG.set(prefix);
   const started = Date.now();
   let n = 0;
   for (;;) {
-    for (let i = 0; i < 128; i++) {
-      const digits = utf8(String(n));
-      const msg = new Uint8Array(prefix.length + digits.length);
-      msg.set(prefix);
-      msg.set(digits, prefix.length);
-      if (zeroBits(powHash(msg)) >= bits) return String(n);
+    for (let i = 0; i < 96; i++) {
+      const digits = String(n);
+      let len = prefix.length;
+      for (let k = 0; k < digits.length; k++) MSG[len++] = digits.charCodeAt(k);
+      if (zeroBits(powHash(MSG, len)) >= bits) return String(n);
       n++;
     }
     if (Date.now() - started > budgetMs) return null;
@@ -482,53 +518,107 @@ function decrypt(pb) {
   return ctrDecrypt(key, b64url(pb.iv), b64url(pb.payload));
 }
 
+/* ---------- permiso guardado ---------- */
+
+function tokenKey(code) {
+  return "tk:" + code;
+}
+
+function savedToken(code) {
+  try {
+    const v = kino.storage.get(tokenKey(code));
+    if (v && typeof v.k === "string" && v.t > Date.now() + 15000) return v.k;
+  } catch (e) {
+    /* sin permiso guardado */
+  }
+  return "";
+}
+
+function saveToken(code, token, expiresIn) {
+  if (!token || !(expiresIn > 0)) return;
+  const ms = expiresIn * 1000;
+  try {
+    kino.storage.set(tokenKey(code), { k: token, t: Date.now() + ms - 15000 }, { ttlMs: Math.min(ms, 2592000000) });
+  } catch (e) {
+    /* no se pudo guardar */
+  }
+}
+
 /* ---------- reproductor Byse ---------- */
 
-async function byse(embed, pageUrl) {
+function parseEmbed(embed) {
   const u = new URL(embed);
-  const origin = u.origin;
   const m = u.pathname.match(/\/e\/([A-Za-z0-9._~-]+)/);
-  if (!m) throw kino.error("not_found", "embed sin código");
-  const api = origin + "/api/videos/" + encodeURIComponent(m[1]) + "/embed/";
+  const seg = u.pathname.split("/").filter(Boolean);
+  const code = m ? m[1] : seg[seg.length - 1] || "";
+  return { origin: u.origin, code };
+}
+
+async function byse(embed, pageUrl) {
+  const { origin, code } = parseEmbed(embed);
+  if (!code) throw kino.error("not_found", "embed sin código: " + embed);
+  const api = origin + "/api/videos/" + encodeURIComponent(code) + "/";
   const h = {
     "X-Embed-Origin": "tubepelis.com",
     "X-Embed-Referer": pageUrl,
     "X-Embed-Parent": pageUrl,
+    Origin: origin,
     Referer: origin + "/",
+    "X-Requested-With": "XMLHttpRequest",
   };
 
-  const settings = await get(api + "settings", h);
-  if (!settings.ok) throw kino.error("unavailable", "settings " + settings.status);
-  const cfg = settings.json();
-  const needs = cfg && cfg.captcha_required === true;
+  const settings = await get(api + "embed/settings", h);
+  if (!settings.ok) throw kino.error("unavailable", "settings " + settings.status + " " + origin);
 
-  let token = "";
-  if (needs) {
-    const start = await postJson(api + "captcha", h, {});
+  let token = savedToken(code);
+  if (!token) {
+    const start = await postJson(api + "embed/captcha", h, {});
     if (!start.ok || !start.json || !start.json.pow_token) throw kino.error("rate_limited", "captcha " + start.status);
-    const solution = await solve(String(start.json.pow_nonce || ""), Number(start.json.pow_difficulty || 0), 14000);
+    const solution = await solve(String(start.json.pow_nonce || ""), Number(start.json.pow_difficulty || 0), 15000);
     if (solution === null) throw kino.error("rate_limited", "pow agotado");
-    const check = await postJson(api + "captcha/verify", h, { pow_token: start.json.pow_token, solution });
+    const check = await postJson(api + "embed/captcha/verify", h, { pow_token: start.json.pow_token, solution });
     if (!check.ok || !check.json || check.json.status !== "ok" || !check.json.token) {
       throw kino.error("rate_limited", "verify " + (check.json && check.json.status));
     }
     token = String(check.json.token);
+    saveToken(code, token, Number(check.json.expires_in || 0));
   }
 
-  const hh = token ? { ...h, "X-Captcha-Token": token } : h;
-  let play = await postJson(api + "playback", hh, {});
-  if (!play.ok) {
-    const r = await get(api + "playback", hh);
-    if (r.ok) play = { ok: true, json: r.json() };
+  const hh = { ...h, "X-Captcha-Token": token };
+  const tries = [
+    { url: api + "embed/playback", method: "POST" },
+    { url: api + "embed/playback", method: "GET" },
+    { url: api + "playback", method: "POST" },
+    { url: api + "playback", method: "GET" },
+  ];
+  let play = null;
+  const seen = [];
+  for (const t of tries) {
+    if (t.method === "POST") play = await postJson(t.url, hh, {});
+    else {
+      const r = await get(t.url, hh);
+      let json = null;
+      if (r.ok) {
+        try {
+          json = r.json();
+        } catch (e) {
+          json = null;
+        }
+      }
+      play = { ok: r.ok && !!json, status: r.status, json };
+    }
+    seen.push(t.url.replace(origin, "") + " " + play.status);
+    if (play.ok && play.json) break;
+    if (play.status === 401 || play.status === 403) break;
   }
-  if (!play.ok || !play.json) throw kino.error("unavailable", "playback " + play.status);
+  if (!play || !play.ok || !play.json) throw kino.error("unavailable", "playback " + seen.join(" | "));
 
   let body = play.json;
   if (body.playback) {
     try {
       body = JSON.parse(new TextDecoder().decode(decrypt(body.playback)));
     } catch (e) {
-      throw kino.error("unavailable", "descifrado");
+      throw kino.error("unavailable", "descifrado " + (e && e.message));
     }
   }
   const list = Array.isArray(body.sources) ? body.sources : [];
