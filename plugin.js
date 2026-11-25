@@ -1,5 +1,5 @@
 /* Pelistube — plugin de Kino
-   Catálogo: TubePelis. Reproductores: Byse (API con prueba de trabajo) y PlayMogo. */
+   Catálogo: TubePelis. Reproductores: Byse (API con prueba de trabajo) y Doodstream. */
 
 const SITE = "https://www.tubepelis.com";
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -8,11 +8,26 @@ const BASE_H = {
   "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
   Accept: "text/html,application/xhtml+xml,*/*",
 };
-const PLAYER_HOSTS = ["byseqekaho.com", "playmogo.com", "n1mwq.org"];
+const KNOWN = [
+  "byseqekaho.com",
+  "playmogo.com",
+  "n1mwq.org",
+  "dood.xxx",
+  "dood.watch",
+  "doodstream.com",
+  "dood.so",
+  "dood.la",
+  "dood.pm",
+  "dsvplay.com",
+  "voe.sx",
+  "filemoon.sx",
+  "streamtape.com",
+  "mixdrop.co",
+];
 const POW_MS = 12000;
 
-const en = () => /^en/i.test(String(kino.lang || ""));
-const tr = (es, enText) => (en() ? enText : es);
+const isEn = () => /^en/i.test(String(kino.lang || ""));
+const tr = (es, enText) => (isEn() ? enText : es);
 
 /* ---------- red ---------- */
 
@@ -48,12 +63,18 @@ function postJson(url, headers, body) {
   });
 }
 
+function postForm(url, headers, body) {
+  return req(url, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, headers),
+    body: body,
+  });
+}
+
 async function page(url, referer) {
   const r = await get(url, referer ? { Referer: referer } : null);
   if (!r.ok) {
-    if (r.status === 404) {
-      throw kino.error("not_found", "http 404", { userMessage: "Ese título ya no está en el sitio." });
-    }
+    if (r.status === 404) throw kino.error("not_found", "http 404", { userMessage: "Ese título ya no está en el sitio." });
     throw kino.error("unavailable", "http " + r.status, { userMessage: "El sitio no respondió. Inténtalo más tarde." });
   }
   return r.text();
@@ -101,6 +122,14 @@ function slugOf(path) {
 
 function pathOf(url) {
   return String(url).replace(/^https?:\/\/[^/]+/i, "").split("#")[0];
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return "";
+  }
 }
 
 function mimeOf(u, hint) {
@@ -162,89 +191,77 @@ function catLinks(html) {
   return out;
 }
 
-/* ---------- prueba de trabajo (PoW) ---------- */
+/* ---------- prueba de trabajo (PoW), versión rápida ---------- */
 
 const P_BASE = new Uint32Array(4);
-const P_STATE = new Uint32Array(4);
 const P_WORK = new Uint32Array(512);
-const P_OUT = new Uint32Array(8);
 const P_K1 = 2654435761;
 const P_K2 = 2246822519;
 
-function rotl(x, n) {
-  return ((x << n) | (x >>> (32 - n))) >>> 0;
-}
-
-function zeroBits(a) {
-  let n = 0;
-  for (let i = 0; i < a.length; i++) {
-    const v = a[i] >>> 0;
-    if (v === 0) {
-      n += 32;
-      continue;
-    }
-    n += Math.clz32(v);
-    break;
-  }
-  return n;
-}
-
-function mix(e) {
-  e[0] = (e[0] + e[1]) >>> 0;
-  e[3] = rotl(e[3] ^ e[0], 16);
-  e[2] = (e[2] + e[3]) >>> 0;
-  e[1] = rotl(e[1] ^ e[2], 12);
-  e[0] = (e[0] + e[1]) >>> 0;
-  e[3] = rotl(e[3] ^ e[0], 8);
-  e[2] = (e[2] + e[3]) >>> 0;
-  e[1] = rotl(e[1] ^ e[2], 7);
+function mixAll(st) {
+  st[0] = (st[0] + st[1]) >>> 0;
+  st[3] = ((st[3] ^ st[0]) << 16) | ((st[3] ^ st[0]) >>> 16);
+  st[2] = (st[2] + st[3]) >>> 0;
+  st[1] = ((st[1] ^ st[2]) << 12) | ((st[1] ^ st[2]) >>> 20);
+  st[0] = (st[0] + st[1]) >>> 0;
+  st[3] = ((st[3] ^ st[0]) << 8) | ((st[3] ^ st[0]) >>> 24);
+  st[2] = (st[2] + st[3]) >>> 0;
+  st[1] = ((st[1] ^ st[2]) << 7) | ((st[1] ^ st[2]) >>> 25);
+  st[3] >>>= 0;
+  st[1] >>>= 0;
 }
 
 function powTry(digits, bits) {
-  const e = P_STATE;
+  const st = P_WORK.subarray(0, 4);
   const r = P_WORK;
-  e[0] = P_BASE[0];
-  e[1] = P_BASE[1];
-  e[2] = P_BASE[2];
-  e[3] = P_BASE[3];
+  st[0] = P_BASE[0];
+  st[1] = P_BASE[1];
+  st[2] = P_BASE[2];
+  st[3] = P_BASE[3];
   for (let i = 0; i < digits.length; i++) {
-    e[0] = (e[0] + (digits.charCodeAt(i) & 255)) >>> 0;
-    e[0] = rotl(e[0], 7);
-    mix(e);
+    st[0] = (st[0] + (digits.charCodeAt(i) & 255)) >>> 0;
+    st[0] = ((st[0] << 7) | (st[0] >>> 25)) >>> 0;
+    mixAll(st);
   }
-  for (let i = 0; i < 8; i++) mix(e);
-  for (let i = 0; i < 512; i++) {
-    mix(e);
-    r[i] = (e[0] ^ e[2]) >>> 0;
+  for (let i = 0; i < 8; i++) mixAll(st);
+  for (let i = 4; i < 516; i++) {
+    mixAll(st);
+    r[i] = (st[0] ^ st[2]) >>> 0;
   }
   for (let k = 0; k < 2; k++) {
-    for (let s = 0; s < 512; s++) {
-      const a = r[s] & 511;
+    for (let s = 4; s < 516; s++) {
+      const a = 4 + (r[s] & 511);
       let c = (r[s] + r[a]) >>> 0;
-      c = rotl(c, 13);
-      c = (c ^ Math.imul(r[(s + 1) & 511], P_K1)) >>> 0;
+      c = ((c << 13) | (c >>> 19)) >>> 0;
+      c = (c ^ Math.imul(r[s + 1 > 515 ? 4 : s + 1], P_K1)) >>> 0;
       r[s] = c;
-      e[0] = (e[0] ^ c) >>> 0;
-      mix(e);
+      st[0] = (st[0] ^ c) >>> 0;
+      mixAll(st);
     }
   }
-  for (let i = 0; i < 8; i++) {
-    mix(e);
-    let s = e[0];
-    const a = i * 64;
+  let zeros = 0;
+  for (let i = 0; i < 8 && zeros < bits; i++) {
+    mixAll(st);
+    let s = st[0];
+    const a = 4 + i * 64;
     for (let c = 0; c < 64; c++) {
       const d = r[a + c];
       s = (s + d) >>> 0;
-      s = rotl(s, 5);
+      s = ((s << 5) | (s >>> 27)) >>> 0;
       s = (s ^ Math.imul(d, P_K2)) >>> 0;
     }
-    P_OUT[i] = (s ^ e[2]) >>> 0;
+    const o = (s ^ st[2]) >>> 0;
+    if (o === 0) zeros += 32;
+    else {
+      zeros += Math.clz32(o);
+      break;
+    }
   }
-  return zeroBits(P_OUT) >= bits;
+  return zeros >= bits;
 }
 
-async function solve(nonce, bits, budgetMs) {
-  if (!(bits > 0)) return "0";
+async function solve(nonce, bits, budgetMs, startAt) {
+  if (!(bits > 0)) return { solution: "0" };
   const prefix = String(nonce) + ":";
   P_BASE[0] = 1779033703;
   P_BASE[1] = 3144134277;
@@ -252,24 +269,26 @@ async function solve(nonce, bits, budgetMs) {
   P_BASE[3] = 2773480762;
   for (let i = 0; i < prefix.length; i++) {
     P_BASE[0] = (P_BASE[0] + (prefix.charCodeAt(i) & 255)) >>> 0;
-    P_BASE[0] = rotl(P_BASE[0], 7);
+    P_BASE[0] = ((P_BASE[0] << 7) | (P_BASE[0] >>> 25)) >>> 0;
     P_BASE[0] = (P_BASE[0] + P_BASE[1]) >>> 0;
-    P_BASE[3] = rotl(P_BASE[3] ^ P_BASE[0], 16);
+    P_BASE[3] = ((P_BASE[3] ^ P_BASE[0]) << 16) | ((P_BASE[3] ^ P_BASE[0]) >>> 16);
     P_BASE[2] = (P_BASE[2] + P_BASE[3]) >>> 0;
-    P_BASE[1] = rotl(P_BASE[1] ^ P_BASE[2], 12);
+    P_BASE[1] = ((P_BASE[1] ^ P_BASE[2]) << 12) | ((P_BASE[1] ^ P_BASE[2]) >>> 20);
     P_BASE[0] = (P_BASE[0] + P_BASE[1]) >>> 0;
-    P_BASE[3] = rotl(P_BASE[3] ^ P_BASE[0], 8);
+    P_BASE[3] = ((P_BASE[3] ^ P_BASE[0]) << 8) | ((P_BASE[3] ^ P_BASE[0]) >>> 24);
     P_BASE[2] = (P_BASE[2] + P_BASE[3]) >>> 0;
-    P_BASE[1] = rotl(P_BASE[1] ^ P_BASE[2], 7);
+    P_BASE[1] = ((P_BASE[1] ^ P_BASE[2]) << 7) | ((P_BASE[1] ^ P_BASE[2]) >>> 25);
+    P_BASE[3] >>>= 0;
+    P_BASE[1] >>>= 0;
   }
   const started = Date.now();
-  let n = 0;
+  let n = startAt > 0 ? startAt : 0;
   for (;;) {
-    for (let i = 0; i < 4096; i++) {
-      if (powTry(String(n), bits)) return String(n);
+    for (let i = 0; i < 2048; i++) {
+      if (powTry(String(n), bits)) return { solution: String(n) };
       n++;
     }
-    if (Date.now() - started > budgetMs) return null;
+    if (Date.now() - started > budgetMs) return { next: n };
     await kino.sleep(0);
   }
 }
@@ -315,14 +334,7 @@ async function decrypt(pb) {
   return new TextDecoder().decode(pt);
 }
 
-/* ---------- reproductor Byse ---------- */
-
-function parseEmbed(embed) {
-  const u = new URL(embed);
-  const m = u.pathname.match(/\/e\/([A-Za-z0-9._~-]+)/);
-  const seg = u.pathname.split("/").filter(Boolean);
-  return { origin: u.origin, code: m ? m[1] : seg[seg.length - 1] || "" };
-}
+/* ---------- estado del PoW ---------- */
 
 function fingerprint() {
   try {
@@ -340,13 +352,6 @@ function fingerprint() {
     /* no se pudo guardar */
   }
   return s;
-}
-
-function sourcesFrom(b) {
-  const list = b && Array.isArray(b.sources) ? b.sources : [];
-  return list
-    .filter((s) => s && typeof s.url === "string" && /^https:\/\//.test(s.url))
-    .map((s) => ({ url: s.url, mime: mimeOf(s.url, s.mime_type), label: s.label || s.quality || "" }));
 }
 
 function savedToken(code) {
@@ -368,30 +373,107 @@ function saveToken(code, token, ttl) {
   }
 }
 
-async function routes(origin, code, h, fp) {
-  const base = origin + "/api/videos/" + encodeURIComponent(code) + "/";
-  const cands = [
-    ["epb", "embed/playback"],
-    ["epb/", "embed/playback/"],
-    ["pb", "playback"],
-    ["pb/", "playback/"],
-    ["est", "embed/stream"],
-    ["st", "stream"],
-    ["edt", "embed/details"],
-    ["dt", "details"],
-  ];
-  const out = [];
-  for (const [label, path] of cands) {
-    let st = 0;
-    try {
-      const r = await postJson(base + path, h, { fingerprint: fp });
-      st = r.status;
-    } catch (e) {
-      st = 0;
-    }
-    out.push(label + ":" + st);
+function powState(code) {
+  try {
+    const v = kino.storage.get("pw:" + code);
+    if (typeof v !== "string") return null;
+    const p = v.split("|");
+    return { t: p[0], n: Number(p[1]) || 0 };
+  } catch (e) {
+    return null;
   }
-  return out.join(" ");
+}
+
+function savePow(code, token, n) {
+  try {
+    kino.storage.set("pw:" + code, token + "|" + n, { ttlMs: 3600000 });
+  } catch (e) {
+    /* sin almacenamiento */
+  }
+}
+
+function clearPow(code) {
+  try {
+    kino.storage.remove("pw:" + code);
+  } catch (e) {
+    /* nada */
+  }
+}
+
+/* ---------- reproductor Byse ---------- */
+
+function parseEmbed(embed) {
+  const u = new URL(embed);
+  const m = u.pathname.match(/\/e\/([A-Za-z0-9._~-]+)/);
+  const seg = u.pathname.split("/").filter(Boolean);
+  return { origin: u.origin, code: m ? m[1] : seg[seg.length - 1] || "" };
+}
+
+function sourcesFrom(b) {
+  const list = b && Array.isArray(b.sources) ? b.sources : [];
+  return list
+    .filter((s) => s && typeof s.url === "string" && /^https:\/\//.test(s.url))
+    .map((s) => ({ url: s.url, mime: mimeOf(s.url, s.mime_type), label: s.label || s.quality || "" }));
+}
+
+function byseHeaders(origin, embed, pageUrl) {
+  return {
+    "X-Embed-Origin": "tubepelis.com",
+    "X-Embed-Referer": pageUrl,
+    "X-Embed-Parent": embed,
+    Origin: origin,
+    Referer: embed,
+    "X-Requested-With": "XMLHttpRequest",
+    Accept: "application/json",
+  };
+}
+
+async function playback(api, h, fp, token) {
+  const hh = Object.assign({}, h);
+  if (token) hh["X-Captcha-Token"] = token;
+  const q = "?fingerprint=" + encodeURIComponent(fp);
+  let r = await get(api + "embed/playback" + q, hh);
+  if (r.ok) return r;
+  let last = r;
+  r = await postJson(api + "embed/playback", hh, { fingerprint: fp });
+  if (r.ok) return r;
+  if (r.status !== 405) last = r;
+  r = await postForm(api + "embed/playback", hh, "fingerprint=" + encodeURIComponent(fp));
+  if (r.ok) return r;
+  if (r.status !== 405) last = r;
+  r = await get(api + "embed/playback/" + encodeURIComponent(fp), hh);
+  if (r.ok) return r;
+  return last;
+}
+
+async function captcha(api, h, fp, code) {
+  let start = await postJson(api + "embed/captcha", h, { fingerprint: fp });
+  let sj = start.ok ? await start.json() : null;
+  if (!sj || !sj.pow_token) {
+    const g = await get(api + "embed/captcha?fingerprint=" + encodeURIComponent(fp), h);
+    sj = g.ok ? await g.json() : null;
+    if (!sj || !sj.pow_token) start = g;
+  }
+  if (!sj || !sj.pow_token) throw kino.error("rate_limited", "captcha " + start.status);
+  const tok = String(sj.pow_token);
+  const st = powState(code);
+  const from = st && st.t === tok ? st.n : 0;
+  const res = await solve(String(sj.pow_nonce || ""), Number(sj.pow_difficulty || 0), POW_MS, from);
+  if (!res.solution) {
+    savePow(code, tok, res.next || 0);
+    throw kino.error("rate_limited", "pow agotado");
+  }
+  const check = await postJson(api + "embed/captcha/verify", h, {
+    pow_token: tok,
+    solution: res.solution,
+    fingerprint: fp,
+  });
+  const cj = check.ok ? await check.json() : null;
+  if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (cj && cj.status));
+  const t = String(cj.token);
+  saveToken(code, t, Number(cj.expires_in || 0));
+  clearPow(code);
+  return t;
 }
 
 async function byse(embed, pageUrl) {
@@ -401,14 +483,7 @@ async function byse(embed, pageUrl) {
   if (!code) throw kino.error("not_found", "embed sin código");
   const api = origin + "/api/videos/" + encodeURIComponent(code) + "/";
   const fp = fingerprint();
-  const h = {
-    "X-Embed-Origin": "tubepelis.com",
-    "X-Embed-Referer": pageUrl,
-    "X-Embed-Parent": embed,
-    Origin: origin,
-    Referer: embed,
-    "X-Requested-With": "XMLHttpRequest",
-  };
+  const h = byseHeaders(origin, embed, pageUrl);
 
   const settings = await get(api + "embed/settings", h);
   if (!settings.ok) throw kino.error("unavailable", "settings " + settings.status);
@@ -423,32 +498,14 @@ async function byse(embed, pageUrl) {
   let token = savedToken(code);
   let play = null;
   if (token) {
-    play = await postJson(api + "embed/playback", Object.assign({}, h, { "X-Captcha-Token": token }), { fingerprint: fp });
+    play = await playback(api, h, fp, token);
     if (play.status === 401 || play.status === 403) token = "";
   }
-
   if (!token) {
-    const start = await postJson(api + "embed/captcha", h, { fingerprint: fp });
-    const sj = start.ok ? await start.json() : null;
-    if (!sj || !sj.pow_token) throw kino.error("rate_limited", "captcha " + start.status);
-    const solution = await solve(String(sj.pow_nonce || ""), Number(sj.pow_difficulty || 0), POW_MS);
-    if (solution === null) throw kino.error("rate_limited", "pow agotado");
-    const check = await postJson(api + "embed/captcha/verify", h, {
-      pow_token: sj.pow_token,
-      solution: solution,
-      fingerprint: fp,
-    });
-    const cj = check.ok ? await check.json() : null;
-    if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (cj && cj.status));
-    token = String(cj.token);
-    saveToken(code, token, Number(cj.expires_in || 0));
-    play = await postJson(api + "embed/playback", Object.assign({}, h, { "X-Captcha-Token": token }), { fingerprint: fp });
+    token = await captcha(api, h, fp, code);
+    play = await playback(api, h, fp, token);
   }
-
-  if (!play || !play.ok) {
-    const map = await routes(origin, code, h, fp);
-    throw kino.error("unavailable", ("pb " + (play ? play.status : 0) + " " + map).slice(0, 180));
-  }
+  if (!play || !play.ok) throw kino.error("unavailable", "playback " + (play ? play.status : 0));
 
   let body = await play.json();
   if (!body) throw kino.error("unavailable", "respuesta vacía");
@@ -467,6 +524,27 @@ async function byse(embed, pageUrl) {
   return { streams: streams, subs: subs, origin: origin, embed: embed };
 }
 
+/* ---------- reproductor Doodstream ---------- */
+
+async function dood(embed, pageUrl) {
+  const origin = new URL(embed).origin;
+  const r = await get(embed, { Referer: pageUrl });
+  if (!r.ok) throw kino.error("unavailable", "dood " + r.status);
+  const html = await r.text();
+  const m = html.match(/\/pass_md5\/([^"'\s<>]+)/);
+  if (!m) throw kino.error("not_found", "dood sin pass");
+  const pr = await get(origin + "/pass_md5/" + m[1], { Referer: embed });
+  if (!pr.ok) throw kino.error("unavailable", "pass " + pr.status);
+  const data = (await pr.text()).trim();
+  if (!/^https?:/i.test(data)) throw kino.error("not_found", "pass raro");
+  const token = data.substring(data.lastIndexOf("/") + 1);
+  const abc = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let rnd = "";
+  for (let i = 0; i < 10; i++) rnd += abc.charAt(Math.floor(Math.random() * abc.length));
+  const url = data + rnd + "?token=" + token + "&expiry=" + Date.now();
+  return { streams: [{ url: url, mime: "video/mp4", label: "" }], subs: [], origin: origin, embed: embed };
+}
+
 /* ---------- reproductores genéricos ---------- */
 
 function findMedia(body, base) {
@@ -477,8 +555,7 @@ function findMedia(body, base) {
   for (const re of pats) {
     const m = body.match(re);
     if (m && m.length) {
-      const clean = m[0].replace(/\\\//g, "/");
-      const u = abs(clean, base);
+      const u = abs(m[0].replace(/\\\//g, "/"), base);
       if (u) return u;
     }
   }
@@ -502,46 +579,51 @@ function findMedia(body, base) {
 async function generic(embed, pageUrl) {
   const r = await get(embed, { Referer: pageUrl });
   if (!r.ok) throw kino.error("unavailable", "embed " + r.status);
-  const body = await r.text();
-  const hit = findMedia(body, embed);
+  const hit = findMedia(await r.text(), embed);
   if (!hit) throw kino.error("not_found", "sin media");
-  const host = new URL(embed).hostname;
-  return {
-    streams: [{ url: hit, mime: mimeOf(hit), label: "" }],
-    subs: [],
-    origin: "https://" + host,
-    embed: embed,
-  };
+  return { streams: [{ url: hit, mime: mimeOf(hit), label: "" }], subs: [], origin: new URL(embed).origin, embed: embed };
 }
 
-/* ---------- salidas ---------- */
-
 async function play(embed, pageUrl) {
-  if (/byseqekaho\./.test(embed)) return await byse(embed, pageUrl);
+  const h = hostOf(embed);
+  if (/dood|dsvplay/.test(h)) return await dood(embed, pageUrl);
+  if (/byseqekaho|playmogo|n1mwq/.test(h)) {
+    try {
+      return await byse(embed, pageUrl);
+    } catch (e) {
+      return await generic(embed, pageUrl);
+    }
+  }
   return await generic(embed, pageUrl);
 }
 
 function labelOf(url) {
-  const h = String(url).replace(/^https?:\/\//, "").split("/")[0];
+  const h = hostOf(url);
   if (/byseqekaho/.test(h)) return "Byse";
+  if (/dood|dsvplay/.test(h)) return "Dood";
   if (/playmogo/.test(h)) return "PlayMogo";
   return h.slice(0, 48);
 }
 
 function embeds(html, pageUrl) {
   const out = [];
+  const unknown = [];
   const add = (u) => {
     const a = abs(u, pageUrl);
-    if (!a) return;
-    if (!PLAYER_HOSTS.some((h) => a.indexOf("//" + h) > -1 || a.indexOf("." + h + "/") > -1)) return;
-    if (out.indexOf(a) < 0) out.push(a);
+    if (!a || !/^https:/i.test(a)) return;
+    if (/\.(jpg|jpeg|png|webp|gif|css|js)(\?|$)/i.test(a)) return;
+    if (out.indexOf(a) > -1 || unknown.indexOf(a) > -1) return;
+    const host = hostOf(a);
+    if (!host) return;
+    if (KNOWN.some((k) => host === k || host.slice(-k.length - 1) === "." + k)) out.push(a);
+    else if (/\/(e|v|embed|d|player)\/[A-Za-z0-9._~-]{4,}/.test(a)) unknown.push(a);
   };
-  const re = /(?:src|data-src|data-player|data-video|data-url|data-link|href)="([^"]+)"/gi;
+  const re = /(?:src|data-src|data-player|data-video|data-url|data-link|data-code|href)="([^"]+)"/gi;
   let m;
   while ((m = re.exec(html))) add(m[1]);
-  const re2 = /https?:(?:\\\/|\/){2}[^"'\\\s]*(?:byseqekaho|playmogo|n1mwq)\.com[^"'\\\s]*/gi;
+  const re2 = /https?:(?:\\\/|\/){2}[^"'\\\s]*(?:byseqekaho|playmogo|n1mwq|dood|dsvplay)[^"'\\\s]*/gi;
   while ((m = re2.exec(html))) add(m[0].replace(/\\\//g, "/"));
-  return out;
+  return out.concat(unknown.slice(0, 2));
 }
 
 /* ---------- capacidades ---------- */
@@ -666,11 +748,16 @@ export async function resolve(ref) {
   const pageUrl = SITE + path;
   const html = await page(pageUrl);
   const list = embeds(html, pageUrl);
-  if (!list.length) throw kino.error("not_found", "sin reproductor", { userMessage: "Este título no tiene reproductor disponible." });
+  if (!list.length) {
+    const n = (html.match(/<iframe/gi) || []).length;
+    throw kino.error("not_found", "sin reproductor (iframes " + n + ")", {
+      userMessage: "Este título no tiene reproductor disponible.",
+    });
+  }
 
   const order = [];
   for (let i = 0; i < list.length; i++) order.push((pick + i) % list.length);
-  let last = null;
+  const fails = [];
   for (const i of order) {
     try {
       const got = await play(list[i], pageUrl);
@@ -681,15 +768,35 @@ export async function resolve(ref) {
       });
       const first = got.streams[0];
       const stream = { url: first.url, mime: first.mime };
-      if (got.origin && got.origin !== "null") {
-        stream.headers = { Referer: got.embed, Origin: got.origin };
-      }
+      if (got.origin && got.origin !== "null") stream.headers = { Referer: got.embed, Origin: got.origin };
       if (got.subs.length) stream.subtitles = got.subs;
       if (alts.length) stream.alternatives = alts;
       return stream;
     } catch (e) {
-      last = e;
+      fails.push(labelOf(list[i]) + ": " + (e && e.message ? e.message : "error"));
     }
   }
-  throw last || kino.error("unavailable", "ningún reproductor respondió", { userMessage: "Ningún reproductor respondió. Prueba más tarde." });
+  throw kino.error("unavailable", ("reproductores: " + fails.join(", ")).slice(0, 190), {
+    userMessage: "Ningún reproductor respondió. Prueba más tarde.",
+  });
+}
+
+export async function prepare(ref) {
+  try {
+    const path = String(ref || "").split("|")[1] || "";
+    if (!path) return;
+    const pageUrl = SITE + path;
+    const list = embeds(await page(pageUrl), pageUrl);
+    const first = list.filter((u) => /byseqekaho|playmogo|n1mwq/.test(u))[0];
+    if (!first) return;
+    const parsed = parseEmbed(first);
+    if (!parsed.code) return;
+    const api = parsed.origin + "/api/videos/" + encodeURIComponent(parsed.code) + "/";
+    const fp = fingerprint();
+    const h = byseHeaders(parsed.origin, first, pageUrl);
+    if (savedToken(parsed.code)) return;
+    await captcha(api, h, fp, parsed.code);
+  } catch (e) {
+    /* prepare nunca falla */
+  }
 }
