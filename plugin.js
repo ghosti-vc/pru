@@ -185,11 +185,19 @@ function hostOf(u) {
 
 const isHls = (u) => !/\.(mp4|mkv|webm)(\?|$)/i.test(String(u || ""));
 
-// Abre el manifiesto con las mismas cabeceras y comprueba que sea un .m3u8 de verdad.
-async function check(c) {
-  if (!isHls(c.url)) return { ok: true, why: "mp4" };
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+// Cabeceras de navegador para el reproductor: algunos servidores dan 403 si el cliente no se identifica como navegador.
+function browserHeaders(url, own) {
+  const h = { "User-Agent": UA, Accept: "*/*", "Accept-Language": "es-419,es;q=0.9" };
+  const host = hostOf(url);
+  if (host) { h.Referer = "https://" + host + "/"; h.Origin = "https://" + host; }
+  return Object.assign(h, own || {});
+}
+
+async function openManifest(url, headers, ms) {
   try {
-    const r = await kino.fetch(c.url, { headers: Object.assign({ Accept: "*/*" }, c.headers || {}), timeoutMs: 7000 });
+    const r = await kino.fetch(url, { headers, timeoutMs: ms });
     if (!r.ok) return { ok: false, why: "http " + r.status };
     const t = String(await r.text()).slice(0, 400);
     return /#EXTM3U/.test(t) ? { ok: true, why: "m3u8" } : { ok: false, why: "no es m3u8: " + t.replace(/\s+/g, " ").slice(0, 40) };
@@ -198,8 +206,23 @@ async function check(c) {
   }
 }
 
+// Abre el manifiesto como lo hará el reproductor (cabeceras de navegador) y, si no, sin ellas; guarda las que funcionaron.
+async function check(c, ms) {
+  if (!isHls(c.url)) { c.sendHeaders = browserHeaders(c.url, c.headers); return { ok: true, why: "mp4" }; }
+  const a = browserHeaders(c.url, c.headers);
+  const ra = await openManifest(c.url, a, ms);
+  if (ra.ok) { c.sendHeaders = a; return { ok: true, why: "m3u8 con cabeceras" }; }
+  if (Object.keys(c.headers || {}).length === 0) {
+    const rb = await openManifest(c.url, { Accept: "*/*" }, ms);
+    if (rb.ok) { c.sendHeaders = {}; return { ok: true, why: "m3u8 sin cabeceras" }; }
+    return { ok: false, why: ra.why + " / sin cabeceras: " + rb.why };
+  }
+  return ra;
+}
+
 export async function resolve(ref) {
   await null;
+  const t0 = Date.now();
   const parts = String(ref || "").split(":");
   const id = parts[0];
   if (!/^tt\d+$/.test(id)) throw kino.error("not_found", "ref " + ref);
@@ -207,7 +230,7 @@ export async function resolve(ref) {
   const addonId = type === "series" ? id + ":" + (parts[1] || 1) + ":" + (parts[2] || 1) : id;
   let data;
   try {
-    const r = await kino.fetch(ADDON + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: 12000 });
+    const r = await kino.fetch(ADDON + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: 14000 });
     if (!r.ok) throw kino.error("unavailable", "addon http " + r.status);
     data = await r.json();
   } catch (e) {
@@ -227,7 +250,8 @@ export async function resolve(ref) {
     hints: Object.keys((s && s.behaviorHints) || {}).join(","),
   }));
   // Se prueban a la vez: así se descartan los que dan 403 antes de entregarlos al reproductor.
-  const res = await Promise.all(cands.map((c) => check(c)));
+  const ms = Math.max(2500, Math.min(6000, 19000 - (Date.now() - t0)));
+  const res = await Promise.all(cands.map((c) => check(c, ms)));
   res.forEach((r, i) => kino.log("resolve: " + hostOf(cands[i].url) + " " + (r.ok ? "OK " : "NO ") + r.why + " cabeceras=" + Object.keys(cands[i].headers).length + (cands[i].hints ? " hints=" + cands[i].hints : "")));
   const good = cands.filter((c, i) => res[i].ok);
   if (!good.length) {
@@ -235,7 +259,7 @@ export async function resolve(ref) {
   }
   const mk = (c) => {
     const o = { url: c.url, mime: c.mime, label: c.label };
-    if (Object.keys(c.headers).length) o.headers = c.headers;
+    if (c.sendHeaders && Object.keys(c.sendHeaders).length) o.headers = c.sendHeaders;
     return o;
   };
   const main = mk(good[0]);
