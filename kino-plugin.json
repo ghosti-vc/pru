@@ -1,7 +1,7 @@
 {
   "id": "peliskronos",
   "name": "PELISKronos",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -18,7 +18,9 @@
     "*.metahub.space",
     "addons.4rever.cc",
     "vimeos.net",
-    "*.vimeos.net"
+    "*.vimeos.net",
+    "allcalidad.re",
+    "www.allcalidad.re"
   ],
   "streamHosts": "any",
   "capabilities": [
