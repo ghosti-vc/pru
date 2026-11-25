@@ -212,13 +212,17 @@ async function check(c, ms) {
   const a = browserHeaders(c.url, c.headers);
   const ra = await openManifest(c.url, a, ms);
   if (ra.ok) { c.sendHeaders = a; return { ok: true, why: "m3u8 con cabeceras" }; }
-  if (Object.keys(c.headers || {}).length === 0) {
+  if (Object.keys(c.headers || {}).length === 0 && !/^http 40[13]/.test(ra.why)) {
     const rb = await openManifest(c.url, { Accept: "*/*" }, ms);
     if (rb.ok) { c.sendHeaders = {}; return { ok: true, why: "m3u8 sin cabeceras" }; }
     return { ok: false, why: ra.why + " / sin cabeceras: " + rb.why };
   }
   return ra;
 }
+
+// Hosts que ya fallaron: no se vuelven a probar durante 10 min (ahorra peticiones; Kino limita las de cada llamada).
+const BAD = {};
+const badNow = (u) => { const t = BAD[hostOf(u)]; return t && Date.now() - t < 600000; };
 
 export async function resolve(ref) {
   await null;
@@ -237,12 +241,14 @@ export async function resolve(ref) {
     if (e && e.code === "unavailable") throw e;
     throw kino.error("unavailable", "addon " + String((e && e.code) || (e && e.message) || e).slice(0, 40), { userMessage: "El addon de enlaces no respondió a tiempo. Prueba de nuevo." });
   }
+  const seenUrl = {};
   const list = (Array.isArray(data.streams) ? data.streams : [])
-    .filter((s) => s && typeof s.url === "string" && s.url.indexOf("https://") === 0);
+    .filter((s) => s && typeof s.url === "string" && s.url.indexOf("https://") === 0 && !seenUrl[s.url] && (seenUrl[s.url] = 1))
+    .filter((s) => !badNow(s.url));
   if (!list.length) {
     throw kino.error("not_found", "sin enlaces", { userMessage: "Este título no tiene enlaces disponibles ahora." });
   }
-  const cands = list.slice(0, 8).map((s) => ({
+  const cands = list.slice(0, 4).map((s) => ({
     url: s.url,
     mime: /\.mp4(\?|$)/i.test(s.url) ? "video/mp4" : "application/vnd.apple.mpegurl",
     label: labelOf(s),
@@ -253,6 +259,7 @@ export async function resolve(ref) {
   const ms = Math.max(2500, Math.min(6000, 19000 - (Date.now() - t0)));
   const res = await Promise.all(cands.map((c) => check(c, ms)));
   res.forEach((r, i) => kino.log("resolve: " + hostOf(cands[i].url) + " " + (r.ok ? "OK " : "NO ") + r.why + " cabeceras=" + Object.keys(cands[i].headers).length + (cands[i].hints ? " hints=" + cands[i].hints : "")));
+  res.forEach((r, i) => { if (!r.ok) BAD[hostOf(cands[i].url)] = Date.now(); });
   const good = cands.filter((c, i) => res[i].ok);
   if (!good.length) {
     throw kino.error("unavailable", "ningún enlace abre (" + res.map((r) => r.why).join(" | ").slice(0, 120) + ")", { userMessage: "Los enlaces de este título rechazan la conexión. Prueba otro título." });
