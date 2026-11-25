@@ -222,6 +222,7 @@ async function check(c, ms) {
 
 // Hosts que ya fallaron: no se vuelven a probar durante 10 min (ahorra peticiones; Kino limita las de cada llamada).
 const BAD = {};
+const CACHE = {};
 const badNow = (u) => { const t = BAD[hostOf(u)]; return t && Date.now() - t < 600000; };
 
 export async function resolve(ref) {
@@ -232,19 +233,21 @@ export async function resolve(ref) {
   if (!/^tt\d+$/.test(id)) throw kino.error("not_found", "ref " + ref);
   const type = parts.length >= 2 ? "series" : "movie";
   const addonId = type === "series" ? id + ":" + (parts[1] || 1) + ":" + (parts[2] || 1) : id;
-  let data;
-  try {
+  let data = CACHE[addonId] && Date.now() - CACHE[addonId].t < 600000 ? CACHE[addonId].d : null;
+  if (!data) try {
     const r = await kino.fetch(ADDON + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: 14000 });
     if (!r.ok) throw kino.error("unavailable", "addon http " + r.status);
     data = await r.json();
+    if (data && Array.isArray(data.streams) && data.streams.length) CACHE[addonId] = { t: Date.now(), d: data };
   } catch (e) {
     if (e && e.code === "unavailable") throw e;
     throw kino.error("unavailable", "addon " + String((e && e.code) || (e && e.message) || e).slice(0, 40), { userMessage: "El addon de enlaces no respondió a tiempo. Prueba de nuevo." });
   }
   const seenUrl = {};
-  const list = (Array.isArray(data.streams) ? data.streams : [])
-    .filter((s) => s && typeof s.url === "string" && s.url.indexOf("https://") === 0 && !seenUrl[s.url] && (seenUrl[s.url] = 1))
-    .filter((s) => !badNow(s.url));
+  const all = (Array.isArray(data.streams) ? data.streams : [])
+    .filter((s) => s && typeof s.url === "string" && s.url.indexOf("https://") === 0 && !seenUrl[s.url] && (seenUrl[s.url] = 1));
+  const fresh = all.filter((s) => !badNow(s.url));
+  const list = fresh.length ? fresh : all;
   if (!list.length) {
     throw kino.error("not_found", "sin enlaces", { userMessage: "Este título no tiene enlaces disponibles ahora." });
   }
