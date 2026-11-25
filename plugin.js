@@ -1,6 +1,5 @@
 /* Pelistube — plugin de Kino
-   Catálogo: TubePelis. Los reproductores vienen en reproductor.php?v=<base64>.
-   Opción 1 = Byse, Opción 2 = PlayMogo; los dos usan /e/<código>. */
+   Catálogo: TubePelis. Reproductores: reproductor.php?v=<base64> → Byse / PlayMogo. */
 
 const SITE = "https://www.tubepelis.com";
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -24,6 +23,21 @@ const KNOWN = [
   "filemoon.sx",
   "streamtape.com",
   "mixdrop.co",
+];
+const DENY = [
+  "googleapis.com",
+  "gstatic.com",
+  "jsdelivr.net",
+  "jquery.com",
+  "youtube.com",
+  "ytimg.com",
+  "googletagmanager.com",
+  "google-analytics.com",
+  "facebook.net",
+  "bootstrapcdn.com",
+  "unpkg.com",
+  "cloudflare.com",
+  "image.tmdb.org",
 ];
 const POW_MS = 12000;
 
@@ -458,7 +472,7 @@ async function captcha(api, h, fp, code) {
   const res = await solve(String(sj.pow_nonce || ""), Number(sj.pow_difficulty || 0), POW_MS, from);
   if (!res.solution) {
     savePow(code, tok, res.next || 0);
-    throw kino.error("rate_limited", "pow agotado");
+    throw kino.error("rate_limited", "pow agotado " + res.next);
   }
   const check = await postJson(api + "embed/captcha/verify", h, {
     pow_token: tok,
@@ -505,7 +519,7 @@ async function byse(embed, pageUrl, parent) {
   if (!play || !play.ok) throw kino.error("unavailable", "playback " + (play ? play.status : 0));
 
   let body = await play.json();
-  if (!body) throw kino.error("unavailable", "respuesta vacía");
+  if (!body) throw kino.error("unavailable", "cuerpo no json");
   if (body.playback) {
     try {
       body = JSON.parse(await decrypt(body.playback));
@@ -514,7 +528,7 @@ async function byse(embed, pageUrl, parent) {
     }
   }
   const streams = sourcesFrom(body);
-  if (!streams.length) throw kino.error("not_found", "sin fuentes");
+  if (!streams.length) throw kino.error("not_found", "sin fuentes [" + Object.keys(body).join(",") + "]");
   const subs = (Array.isArray(body.tracks) ? body.tracks : [])
     .filter((t) => t && typeof t.url === "string" && /^https:\/\//.test(t.url))
     .map((t) => ({ url: t.url, label: t.title || t.language || "Subtítulos", mime: "text/vtt" }));
@@ -593,6 +607,7 @@ function unwrap(u) {
     /* ya venía decodificado */
   }
   let t = b.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, "");
+  if (!/^[A-Za-z0-9+/=]+$/.test(t)) return "";
   while (t.length % 4) t += "=";
   let s = "";
   try {
@@ -627,6 +642,14 @@ function isKnown(host) {
   return false;
 }
 
+function isDenied(host) {
+  for (const k of DENY) {
+    if (host === k) return true;
+    if (host.length > k.length && host.slice(-k.length - 1) === "." + k) return true;
+  }
+  return false;
+}
+
 function candidates(html, pageUrl) {
   const known = [];
   const other = [];
@@ -644,7 +667,6 @@ function candidates(html, pageUrl) {
     }
     let a = abs(u, pageUrl).replace(/^http:\/\//i, "https://");
     if (!a || !/^https:/i.test(a)) return;
-    if (/\.(jpe?g|png|webp|gif|css|js|ico|svg|woff2?)(\?|$)/i.test(a)) return;
     const inner = unwrap(a);
     if (inner) a = inner;
     if (seen[a]) return;
@@ -657,18 +679,18 @@ function candidates(html, pageUrl) {
       if (!/^\/(player|reproductor|embed)/i.test(pathOf(a))) return;
       seen[a] = 1;
       own.push({ url: a, parent: pageUrl });
-    } else {
+    } else if (!isDenied(h)) {
       seen[a] = 1;
       other.push({ url: a, parent: pageUrl });
     }
   };
   for (const tag of iframeTags(html)) attrsOf(tag).forEach(add);
-  const re = /(?:src|data-src|data-player|data-video|data-url|data-link|data-code|data-embed|data-srv|value|href)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  const re = /(?:data-src|data-player|data-video|data-url|data-link|data-embed|data-srv|data-code|value)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
   let m;
   while ((m = re.exec(html))) add(m[1] || m[2] || "");
   const re2 = /https?:(?:\\\/|\/){2}[^"'\s]*(?:byseqekaho|playmogo|n1mwq|dood|dsvplay)[^"'\s]*/gi;
   while ((m = re2.exec(html))) add(m[0].replace(/\\\//g, "/"));
-  return known.concat(own, other).slice(0, 8);
+  return known.concat(own, other).slice(0, 6);
 }
 
 function labelOf(url) {
@@ -693,10 +715,16 @@ async function play(c, pageUrl, depth) {
   }
   if (/dood|dsvplay/.test(h)) return await dood(embed, pageUrl);
   if (/byseqekaho|playmogo|n1mwq/.test(h)) {
+    let first = null;
     try {
       return await byse(embed, pageUrl, c.parent);
     } catch (e) {
+      first = e;
+    }
+    try {
       return await generic(embed, pageUrl);
+    } catch (e2) {
+      throw kino.error("unavailable", ("byse " + (first && first.message ? first.message : "") + " / gen " + (e2 && e2.message ? e2.message : "")).slice(0, 150));
     }
   }
   return await generic(embed, pageUrl);
