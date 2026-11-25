@@ -1,4 +1,4 @@
-cat > plugin.js <<'EOF'
+
 // PELISKronos: catálogo desde Cinemeta, enlaces desde el addon KRONOS4K.
 const CINEMETA = "https://v3-cinemeta.strem.io";
 const ADDON = "https://addons.4rever.cc";
@@ -178,4 +178,3 @@ export async function resolve(ref) {
   if (alts.length) main.alternatives = alts;
   return main;
 }
-EOF
