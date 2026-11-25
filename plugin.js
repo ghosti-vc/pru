@@ -1,5 +1,5 @@
 /* Pelistube — plugin de Kino
-   Catálogo: TubePelis. Reproductores: Byse (API con prueba de trabajo) y Doodstream. */
+   Catálogo: TubePelis. Reproductores: Byse (API con prueba de trabajo), Doodstream y el reproductor propio. */
 
 const SITE = "https://www.tubepelis.com";
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -85,7 +85,7 @@ async function page(url, referer) {
 function abs(u, base) {
   if (!u) return "";
   let s = String(u).trim().replace(/&amp;/g, "&");
-  if (!s || s.indexOf("data:") === 0) return "";
+  if (!s || s.indexOf("data:") === 0 || s.charAt(0) === "#") return "";
   if (s.indexOf("//") === 0) s = "https:" + s;
   else if (s.charAt(0) === "/") s = SITE + s;
   else if (!/^https?:/i.test(s)) {
@@ -126,7 +126,7 @@ function pathOf(url) {
 
 function hostOf(url) {
   try {
-    return new URL(url).hostname;
+    return new URL(url).hostname.toLowerCase();
   } catch (e) {
     return "";
   }
@@ -191,24 +191,22 @@ function catLinks(html) {
   return out;
 }
 
-/* ---------- prueba de trabajo (PoW), versión rápida ---------- */
+/* ---------- prueba de trabajo (PoW) ---------- */
 
 const P_BASE = new Uint32Array(4);
-const P_WORK = new Uint32Array(512);
+const P_WORK = new Uint32Array(516);
 const P_K1 = 2654435761;
 const P_K2 = 2246822519;
 
 function mixAll(st) {
   st[0] = (st[0] + st[1]) >>> 0;
-  st[3] = ((st[3] ^ st[0]) << 16) | ((st[3] ^ st[0]) >>> 16);
+  st[3] = (((st[3] ^ st[0]) << 16) | ((st[3] ^ st[0]) >>> 16)) >>> 0;
   st[2] = (st[2] + st[3]) >>> 0;
-  st[1] = ((st[1] ^ st[2]) << 12) | ((st[1] ^ st[2]) >>> 20);
+  st[1] = (((st[1] ^ st[2]) << 12) | ((st[1] ^ st[2]) >>> 20)) >>> 0;
   st[0] = (st[0] + st[1]) >>> 0;
-  st[3] = ((st[3] ^ st[0]) << 8) | ((st[3] ^ st[0]) >>> 24);
+  st[3] = (((st[3] ^ st[0]) << 8) | ((st[3] ^ st[0]) >>> 24)) >>> 0;
   st[2] = (st[2] + st[3]) >>> 0;
-  st[1] = ((st[1] ^ st[2]) << 7) | ((st[1] ^ st[2]) >>> 25);
-  st[3] >>>= 0;
-  st[1] >>>= 0;
+  st[1] = (((st[1] ^ st[2]) << 7) | ((st[1] ^ st[2]) >>> 25)) >>> 0;
 }
 
 function powTry(digits, bits) {
@@ -271,15 +269,13 @@ async function solve(nonce, bits, budgetMs, startAt) {
     P_BASE[0] = (P_BASE[0] + (prefix.charCodeAt(i) & 255)) >>> 0;
     P_BASE[0] = ((P_BASE[0] << 7) | (P_BASE[0] >>> 25)) >>> 0;
     P_BASE[0] = (P_BASE[0] + P_BASE[1]) >>> 0;
-    P_BASE[3] = ((P_BASE[3] ^ P_BASE[0]) << 16) | ((P_BASE[3] ^ P_BASE[0]) >>> 16);
+    P_BASE[3] = (((P_BASE[3] ^ P_BASE[0]) << 16) | ((P_BASE[3] ^ P_BASE[0]) >>> 16)) >>> 0;
     P_BASE[2] = (P_BASE[2] + P_BASE[3]) >>> 0;
-    P_BASE[1] = ((P_BASE[1] ^ P_BASE[2]) << 12) | ((P_BASE[1] ^ P_BASE[2]) >>> 20);
+    P_BASE[1] = (((P_BASE[1] ^ P_BASE[2]) << 12) | ((P_BASE[1] ^ P_BASE[2]) >>> 20)) >>> 0;
     P_BASE[0] = (P_BASE[0] + P_BASE[1]) >>> 0;
-    P_BASE[3] = ((P_BASE[3] ^ P_BASE[0]) << 8) | ((P_BASE[3] ^ P_BASE[0]) >>> 24);
+    P_BASE[3] = (((P_BASE[3] ^ P_BASE[0]) << 8) | ((P_BASE[3] ^ P_BASE[0]) >>> 24)) >>> 0;
     P_BASE[2] = (P_BASE[2] + P_BASE[3]) >>> 0;
-    P_BASE[1] = ((P_BASE[1] ^ P_BASE[2]) << 7) | ((P_BASE[1] ^ P_BASE[2]) >>> 25);
-    P_BASE[3] >>>= 0;
-    P_BASE[1] >>>= 0;
+    P_BASE[1] = (((P_BASE[1] ^ P_BASE[2]) << 7) | ((P_BASE[1] ^ P_BASE[2]) >>> 25)) >>> 0;
   }
   const started = Date.now();
   let n = startAt > 0 ? startAt : 0;
@@ -334,7 +330,7 @@ async function decrypt(pb) {
   return new TextDecoder().decode(pt);
 }
 
-/* ---------- estado del PoW ---------- */
+/* ---------- estado ---------- */
 
 function fingerprint() {
   try {
@@ -545,12 +541,12 @@ async function dood(embed, pageUrl) {
   return { streams: [{ url: url, mime: "video/mp4", label: "" }], subs: [], origin: origin, embed: embed };
 }
 
-/* ---------- reproductores genéricos ---------- */
+/* ---------- genéricos ---------- */
 
 function findMedia(body, base) {
   const pats = [
-    /https?:(?:\\\/|\/){2}[^"'\\\s]+?\.m3u8[^"'\\\s]*/gi,
-    /https?:(?:\\\/|\/){2}[^"'\\\s]+?\.mp4[^"'\\\s]*/gi,
+    /https?:(?:\\\/|\/){2}[^"'\s]+?\.m3u8[^"'\s]*/gi,
+    /https?:(?:\\\/|\/){2}[^"'\s]+?\.mp4[^"'\s]*/gi,
   ];
   for (const re of pats) {
     const m = body.match(re);
@@ -584,8 +580,89 @@ async function generic(embed, pageUrl) {
   return { streams: [{ url: hit, mime: mimeOf(hit), label: "" }], subs: [], origin: new URL(embed).origin, embed: embed };
 }
 
-async function play(embed, pageUrl) {
+/* ---------- candidatos de reproductor ---------- */
+
+function iframeTags(html) {
+  return html.match(/<iframe\b[^>]*>/gi) || [];
+}
+
+function attrsOf(tag) {
+  const out = [];
+  const re = /([a-zA-Z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  let m;
+  while ((m = re.exec(tag))) out.push(m[2] || m[3] || m[4] || "");
+  return out;
+}
+
+function isKnown(host) {
+  for (const k of KNOWN) {
+    if (host === k) return true;
+    if (host.length > k.length && host.slice(-k.length - 1) === "." + k) return true;
+  }
+  return false;
+}
+
+function candidates(html, pageUrl) {
+  const known = [];
+  const other = [];
+  const own = [];
+  const seen = {};
+  const add = (raw) => {
+    let u = String(raw || "").trim();
+    if (!u) return;
+    if (/^https?%3A/i.test(u)) {
+      try {
+        u = decodeURIComponent(u);
+      } catch (e) {
+        /* nada */
+      }
+    }
+    const a = abs(u, pageUrl).replace(/^http:\/\//i, "https://");
+    if (!a || !/^https:/i.test(a)) return;
+    if (/\.(jpe?g|png|webp|gif|css|js|ico|svg|woff2?)(\?|$)/i.test(a)) return;
+    if (seen[a]) return;
+    const h = hostOf(a);
+    if (!h) return;
+    if (isKnown(h)) {
+      seen[a] = 1;
+      known.push(a);
+    } else if (/(^|\.)tubepelis\.com$/.test(h)) {
+      if (!/^\/(player|reproductor|embed)/i.test(pathOf(a))) return;
+      seen[a] = 1;
+      own.push(a);
+    } else {
+      seen[a] = 1;
+      other.push(a);
+    }
+  };
+  for (const tag of iframeTags(html)) attrsOf(tag).forEach(add);
+  const re = /(?:src|data-src|data-player|data-video|data-url|data-link|data-code|data-embed|data-srv|value|href)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  let m;
+  while ((m = re.exec(html))) add(m[1] || m[2] || "");
+  const re2 = /https?:(?:\\\/|\/){2}[^"'\s]*(?:byseqekaho|playmogo|n1mwq|dood|dsvplay)[^"'\s]*/gi;
+  while ((m = re2.exec(html))) add(m[0].replace(/\\\//g, "/"));
+  return known.concat(own, other).slice(0, 8);
+}
+
+function labelOf(url) {
+  const h = hostOf(url);
+  if (/byseqekaho/.test(h)) return "Byse";
+  if (/dood|dsvplay/.test(h)) return "Dood";
+  if (/playmogo/.test(h)) return "PlayMogo";
+  if (/tubepelis/.test(h)) return "Servidor";
+  return h.slice(0, 48);
+}
+
+async function play(embed, pageUrl, depth) {
   const h = hostOf(embed);
+  if (/(^|\.)tubepelis\.com$/.test(h)) {
+    if ((depth || 0) > 1) throw kino.error("not_found", "player anidado");
+    const r = await get(embed, { Referer: pageUrl });
+    if (!r.ok) throw kino.error("unavailable", "player " + r.status);
+    const inner = candidates(await r.text(), embed);
+    if (!inner.length) throw kino.error("not_found", "player vacío");
+    return await play(inner[0], embed, (depth || 0) + 1);
+  }
   if (/dood|dsvplay/.test(h)) return await dood(embed, pageUrl);
   if (/byseqekaho|playmogo|n1mwq/.test(h)) {
     try {
@@ -595,35 +672,6 @@ async function play(embed, pageUrl) {
     }
   }
   return await generic(embed, pageUrl);
-}
-
-function labelOf(url) {
-  const h = hostOf(url);
-  if (/byseqekaho/.test(h)) return "Byse";
-  if (/dood|dsvplay/.test(h)) return "Dood";
-  if (/playmogo/.test(h)) return "PlayMogo";
-  return h.slice(0, 48);
-}
-
-function embeds(html, pageUrl) {
-  const out = [];
-  const unknown = [];
-  const add = (u) => {
-    const a = abs(u, pageUrl);
-    if (!a || !/^https:/i.test(a)) return;
-    if (/\.(jpg|jpeg|png|webp|gif|css|js)(\?|$)/i.test(a)) return;
-    if (out.indexOf(a) > -1 || unknown.indexOf(a) > -1) return;
-    const host = hostOf(a);
-    if (!host) return;
-    if (KNOWN.some((k) => host === k || host.slice(-k.length - 1) === "." + k)) out.push(a);
-    else if (/\/(e|v|embed|d|player)\/[A-Za-z0-9._~-]{4,}/.test(a)) unknown.push(a);
-  };
-  const re = /(?:src|data-src|data-player|data-video|data-url|data-link|data-code|href)="([^"]+)"/gi;
-  let m;
-  while ((m = re.exec(html))) add(m[1]);
-  const re2 = /https?:(?:\\\/|\/){2}[^"'\\\s]*(?:byseqekaho|playmogo|n1mwq|dood|dsvplay)[^"'\\\s]*/gi;
-  while ((m = re2.exec(html))) add(m[0].replace(/\\\//g, "/"));
-  return out.concat(unknown.slice(0, 2));
 }
 
 /* ---------- capacidades ---------- */
@@ -747,10 +795,10 @@ export async function resolve(ref) {
   if (!path) throw kino.error("not_found", "sin ref");
   const pageUrl = SITE + path;
   const html = await page(pageUrl);
-  const list = embeds(html, pageUrl);
+  const list = candidates(html, pageUrl);
   if (!list.length) {
-    const n = (html.match(/<iframe/gi) || []).length;
-    throw kino.error("not_found", "sin reproductor (iframes " + n + ")", {
+    const tags = iframeTags(html).map((t) => t.replace(/\s+/g, " ").slice(0, 62));
+    throw kino.error("not_found", ("sin reproductor (iframes " + tags.length + ": " + tags.slice(0, 2).join(" | ") + ")").slice(0, 190), {
       userMessage: "Este título no tiene reproductor disponible.",
     });
   }
@@ -760,7 +808,7 @@ export async function resolve(ref) {
   const fails = [];
   for (const i of order) {
     try {
-      const got = await play(list[i], pageUrl);
+      const got = await play(list[i], pageUrl, 0);
       const alts = [];
       got.streams.slice(1, 4).forEach((s) => alts.push({ url: s.url, mime: s.mime, label: s.label || s.mime }));
       list.forEach((u, j) => {
@@ -786,16 +834,14 @@ export async function prepare(ref) {
     const path = String(ref || "").split("|")[1] || "";
     if (!path) return;
     const pageUrl = SITE + path;
-    const list = embeds(await page(pageUrl), pageUrl);
+    const list = candidates(await page(pageUrl), pageUrl);
     const first = list.filter((u) => /byseqekaho|playmogo|n1mwq/.test(u))[0];
     if (!first) return;
     const parsed = parseEmbed(first);
     if (!parsed.code) return;
-    const api = parsed.origin + "/api/videos/" + encodeURIComponent(parsed.code) + "/";
-    const fp = fingerprint();
-    const h = byseHeaders(parsed.origin, first, pageUrl);
     if (savedToken(parsed.code)) return;
-    await captcha(api, h, fp, parsed.code);
+    const api = parsed.origin + "/api/videos/" + encodeURIComponent(parsed.code) + "/";
+    await captcha(api, byseHeaders(parsed.origin, first, pageUrl), fingerprint(), parsed.code);
   } catch (e) {
     /* prepare nunca falla */
   }
