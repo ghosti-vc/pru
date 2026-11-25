@@ -882,9 +882,15 @@ async function sleepUpTo(ms) {
 }
 function withTimeout(p, ms) {
   if (typeof kino.sleep !== "function") return p;
-  const stop = sleepUpTo(ms).then(() => { throw new Error("tardó demasiado"); });
+  let done = false;
+  const stop = (async () => {
+    let left = ms;
+    while (left > 0 && !done) { const t = Math.min(left, 400); await kino.sleep(t); left -= t; }
+    if (done) return new Promise(() => {});
+    throw new Error("tardó demasiado");
+  })();
   stop.catch(() => {});
-  return Promise.race([Promise.resolve(p), stop]);
+  return Promise.race([Promise.resolve(p).then((x) => { done = true; return x; }, (e) => { done = true; throw e; }), stop]);
 }
 
 const isDirect = (c) => /\.(m3u8|mp4)(\?|$)/i.test(c.url) && !isDemo(c.url);
@@ -997,18 +1003,21 @@ export async function resolve(ref) {
   };
   const main = primary(ref, t0);
   main.catch(() => {});
-  // Si el addon principal tarda, el respaldo arranca en paralelo (a los 3,5 s).
-  const wait = (ms) => (typeof kino.sleep === "function" ? kino.sleep(ms) : new Promise(() => {}));
-  const first = await Promise.race([main.then(() => "ok", () => "fail"), wait(3500).then(() => "slow")]);
-  if (first === "ok") return main;
-  if (first === "slow") startAc();
-  // Gana el primero que entregue video: el respaldo no espera a que el addon agote su tiempo.
-  const mainP = main.then((v) => ({ v, from: "main" }), (e) => ({ e, from: "main" }));
-  let res = await Promise.race([mainP, first === "slow" ? startAc().then((v) => ({ v, from: "ac" })) : mainP]);
-  if (res.from === "ac" && !res.v) res = await mainP;
-  if (res.v) return res.v;
-  kino.log("addon principal sin video (" + String((res.e && res.e.message) || res.e).slice(0, 50) + "): pruebo AllCalidad");
-  const v = await startAc();
-  if (v) return v;
-  throw res.e || kino.error("unavailable", "sin video");
+  // Prioridad: el addon. Si tarda más de 3,5 s, AllCalidad arranca en paralelo (queda listo por si el addon falla).
+  let settled = false;
+  main.then(() => { settled = true; }, () => { settled = true; });
+  if (typeof kino.sleep === "function") {
+    (async () => {
+      for (let i = 0; i < 9 && !settled; i++) await kino.sleep(400);
+      if (!settled) startAc();
+    })().catch(() => {});
+  }
+  try {
+    return await main;
+  } catch (e) {
+    kino.log("addon principal sin video (" + String((e && e.message) || e).slice(0, 50) + "): uso AllCalidad");
+    const v = await startAc();
+    if (v) return v;
+    throw e;
+  }
 }
