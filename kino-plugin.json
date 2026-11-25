@@ -1,24 +1,21 @@
+cat > kino-plugin.json <<'JSON'
 {
-  "id": "pelistube",
-  "name": "Pelistube",
-  "version": "1.1.0",
+  "id": "peliskronos",
+  "name": "PELISKronos",
+  "version": "0.1.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
-  "description": "Películas y series en español latino de TubePelis, con sus dos reproductores.",
-  "author": "ghosti-vc",
+  "author": "Ghosti-vc",
+  "description": "Películas y series con enlaces en español, sin cuenta.",
+  "categories": ["movies", "series"],
   "hosts": [
-    "www.tubepelis.com",
-    "tubepelis.com",
-    "byseqekaho.com",
-    "playmogo.com",
-    "n1mwq.org",
-    "dood.xxx",
-    "dood.watch",
-    "doodstream.com",
-    "dsvplay.com"
+    "v3-cinemeta.strem.io",
+    "cinemeta-catalogs.strem.io",
+    "addons.4rever.cc",
+    "vimeos.net",
+    "*.vimeos.net"
   ],
-  "streamHosts": "any",
-  "capabilities": ["home", "search", "browse", "episodes", "resolve"],
-  "categories": ["movies", "series"]
+  "capabilities": ["search", "home", "episodes", "resolve"]
 }
+JSON
