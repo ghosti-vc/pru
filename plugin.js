@@ -276,4 +276,4 @@ async function byse(embed, pageUrl) {
     .filter((t) => t && typeof t.url === "string" && /^https:\/\//.test(t.url))
     .map((t) => ({ url: t.url, label: t.title || t.language || "Subtítulos", mime: "text/vtt" }));
   return { streams, subs };
-}
+} 
