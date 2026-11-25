@@ -1,6 +1,6 @@
 /* Pelistube: catálogo de TubePelis y resolución de sus dos reproductores. */
 const BASE = "https://www.tubepelis.com";
-const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const en = () => kino.lang === "en-US";
 const T = (es, txt) => (en() ? txt : es);
@@ -10,8 +10,12 @@ const T = (es, txt) => (en() ? txt : es);
 async function get(url, extra) {
   const headers = {
     "User-Agent": UA,
-    "Accept-Language": en() ? "en-US,en;q=0.9" : "es-CO,es;q=0.9",
-    Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
     ...(extra || {}),
   };
   return kino.fetch(url, { headers, timeoutMs: 12000 });
@@ -72,35 +76,33 @@ const YEAR = /\b(19[5-9]\d|20[0-4]\d)\b/;
 function cards(html, genre, adult) {
   const out = [];
   const seen = new Set();
-  const re = /<a\s[^>]*href="https:\/\/www\.tubepelis\.com\/(pelicula|serie)\/(\d+)\/([^"#?]+)\.html"[^>]*>([\s\S]{0,900}?)<\/a>/g;
+  const re = /href="https:\/\/www\.tubepelis\.com\/(pelicula|serie)\/(\d+)\/([^"#?]+?)\.html"/g;
   let m;
   while ((m = re.exec(html)) !== null) {
     const kind = m[1] === "serie" ? "series" : "movie";
-    const num = m[2];
-    const id = (kind === "series" ? "s" : "m") + num;
+    const id = (kind === "series" ? "s" : "m") + m[2];
     if (seen.has(id)) continue;
-    const block = m[4];
+    const block = html.slice(m.index, m.index + 800);
     const img = block.match(/src="(https:\/\/www\.tubepelis\.com\/files\/uploads\/[^"]+)"/);
-    if (!img) continue;
-    let title = "";
     const alt = block.match(/alt="([^"]*)"/);
-    if (alt) title = decodeEntities(alt[1]);
+    let title = alt ? decodeEntities(alt[1]) : "";
     if (!title) {
       const b = block.match(/<b[^>]*>([\s\S]*?)<\/b>/) || block.match(/<h4[^>]*>([\s\S]*?)<\/h4>/);
       if (b) title = decodeEntities(b[1].replace(/<[^>]+>/g, ""));
     }
-    title = title.replace(/^Póster de\s+/i, "").replace(/\s*\(\d{4}\)\s*$/, "");
+    if (!title) title = decodeEntities(m[3].replace(/-/g, " "));
+    title = title.replace(/^Póster de\s+/i, "").replace(/\s*\(\d{4}\)\s*$/, "").trim();
     if (!title) continue;
     seen.add(id);
     const y = block.match(YEAR);
     const item = {
       id,
-      ref: (kind === "series" ? "s|/serie/" : "m|/pelicula/") + num + "/" + m[3] + ".html|0",
+      ref: (kind === "series" ? "s|/serie/" : "m|/pelicula/") + m[2] + "/" + m[3] + ".html|0",
       title,
       kind,
-      poster: img[1],
       genres: genre ? [genre] : [],
     };
+    if (img) item.poster = img[1];
     if (y) item.year = Number(y[1]);
     if (adult) item.adult = true;
     out.push(item);
@@ -154,10 +156,32 @@ const ROWS = [
   { id: "eroticas", url: "/categoria/eroticas/", title: "Eróticas", titleEn: "Adult", genre: "eroticas", adult: true },
 ];
 
+async function probe(url) {
+  try {
+    const r = await get(url);
+    const t = r.ok ? await r.text() : "";
+    return { ok: r.ok, status: r.status, len: t.length, hits: (t.match(/\/pelicula\//g) || []).length, html: t };
+  } catch (e) {
+    return { ok: false, status: 0, len: 0, hits: 0, html: null, err: (e && e.code) || "red" };
+  }
+}
+
 export async function home() {
   await null;
-  const pages = await mapLimit(ROWS, 5, (row) => getText(BASE + row.url));
-  const rows = [];
+  const diag = [];
+  const pages = await mapLimit(ROWS, 5, async (row) => {
+    const info = await probe(BASE + row.url);
+    diag.push(row.id + " " + (info.ok ? "ok" : "x") + " " + (info.status || info.err) + " len " + info.len + " fichas " + info.hits);
+    return info.html;
+  });
+  const rows = [
+    {
+      id: "diag",
+      title: "Diagnóstico",
+      genre: "otros",
+      items: diag.map((t, i) => ({ id: "d" + i, ref: "m|/pelicula/5149/rivales-en-la-nieve.html|0", title: t, kind: "movie" })),
+    },
+  ];
   pages.forEach((html, i) => {
     if (!html) return;
     const row = ROWS[i];
@@ -173,10 +197,8 @@ export async function search(query) {
   await null;
   const q = String((query && query.q) || query || "").trim();
   if (!q) return [];
-  const url = BASE + "/buscar/?q=" + encodeURIComponent(q);
-  let html = await getText(url);
-  if (!html) return [];
-  let items = cards(html, null, false);
+  let html = await getText(BASE + "/buscar/?q=" + encodeURIComponent(q));
+  let items = html ? cards(html, null, false) : [];
   if (!items.length) {
     const slug = q.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     if (slug) {
@@ -197,9 +219,8 @@ export async function browse(ref) {
   const html = await getText(BASE + "/categoria/" + slug + "/?page=" + page);
   if (!html) return { items: [] };
   const items = cards(html, slug, slug === "eroticas");
-  const next = items.length ? "g|" + slug + "|" + (page + 1) : undefined;
   const out = { items };
-  if (next) out.next = next;
+  if (items.length) out.next = "g|" + slug + "|" + (page + 1);
   return out;
 }
 
@@ -236,7 +257,7 @@ function embedUrls(html) {
     try {
       raw = decodeURIComponent(raw);
     } catch (e) {
-      /* se queda como está */
+      /* se queda igual */
     }
     let url = "";
     try {
@@ -258,7 +279,7 @@ function mimeOf(t) {
   return "";
 }
 
-/* ---------- prueba de trabajo del reproductor ---------- */
+/* ---------- AES para descifrar la respuesta ---------- */
 
 const SBOX = (() => {
   const h =
@@ -351,8 +372,7 @@ function ctrDecrypt(key, iv, data) {
   return out;
 }
 
-/* el hash propio del reproductor */
-const P512 = 511;
+/* ---------- prueba de trabajo del reproductor ---------- */
 
 function rotl(x, n) {
   return ((x << n) | (x >>> (32 - n))) >>> 0;
@@ -384,10 +404,10 @@ function powHash(bytes) {
   }
   for (let k = 0; k < 2; k++) {
     for (let i = 0; i < 512; i++) {
-      const a = r[i] & P512;
+      const a = r[i] & 511;
       let c = (r[i] + r[a]) >>> 0;
       c = rotl(c, 13);
-      c = (c ^ Math.imul(r[(i + 1) & P512], 2654435761)) >>> 0;
+      c = (c ^ Math.imul(r[(i + 1) & 511], 2654435761)) >>> 0;
       r[i] = c;
       e[0] = (e[0] ^ c) >>> 0;
       mix(e);
@@ -440,7 +460,29 @@ async function solve(nonce, bits, budgetMs) {
   }
 }
 
-/* ---------- el reproductor Byse ---------- */
+function decrypt(pb) {
+  const parts = Array.isArray(pb.key_parts) ? pb.key_parts : [];
+  if (!parts.length) throw new Error("sin llave");
+  let order = parts.map((_, i) => i);
+  const v = Number(pb.version);
+  if (v >= 1 && v <= 20) {
+    const pick = [v, 31 - v].filter((n) => n >= 1 && n <= parts.length).map((n) => n - 1);
+    if (pick.length) order = pick;
+  }
+  const chunks = order.map((i) => b64url(parts[i]));
+  let total = 0;
+  chunks.forEach((c) => (total += c.length));
+  const key = new Uint8Array(total);
+  let off = 0;
+  chunks.forEach((c) => {
+    key.set(c, off);
+    off += c.length;
+  });
+  if (total !== 16 && total !== 24 && total !== 32) throw new Error("llave " + total);
+  return ctrDecrypt(key, b64url(pb.iv), b64url(pb.payload));
+}
+
+/* ---------- reproductor Byse ---------- */
 
 async function byse(embed, pageUrl) {
   const u = new URL(embed);
@@ -477,9 +519,7 @@ async function byse(embed, pageUrl) {
   let play = await postJson(api + "playback", hh, {});
   if (!play.ok) {
     const r = await get(api + "playback", hh);
-    if (r.ok) {
-      play = { ok: true, json: r.json() };
-    }
+    if (r.ok) play = { ok: true, json: r.json() };
   }
   if (!play.ok || !play.json) throw kino.error("unavailable", "playback " + play.status);
 
@@ -502,29 +542,7 @@ async function byse(embed, pageUrl) {
   return { streams, subs };
 }
 
-function decrypt(pb) {
-  const parts = Array.isArray(pb.key_parts) ? pb.key_parts : [];
-  if (!parts.length) throw new Error("sin llave");
-  let order = parts.map((_, i) => i);
-  const v = Number(pb.version);
-  if (v >= 1 && v <= 20) {
-    const pick = [v, 31 - v].filter((n) => n >= 1 && n <= parts.length).map((n) => n - 1);
-    if (pick.length) order = pick;
-  }
-  const chunks = order.map((i) => b64url(parts[i]));
-  let total = 0;
-  chunks.forEach((c) => (total += c.length));
-  const key = new Uint8Array(total);
-  let off = 0;
-  chunks.forEach((c) => {
-    key.set(c, off);
-    off += c.length;
-  });
-  if (total !== 16 && total !== 24 && total !== 32) throw new Error("llave " + total);
-  return ctrDecrypt(key, b64url(pb.iv), b64url(pb.payload));
-}
-
-/* ---------- el reproductor DoodStream ---------- */
+/* ---------- reproductor DoodStream ---------- */
 
 async function dood(embed) {
   const origin = new URL(embed).origin;
@@ -537,8 +555,7 @@ async function dood(embed) {
   const base = (await r.text()).trim();
   if (!/^https:\/\//.test(base)) throw kino.error("unavailable", "base rara");
   const rand = Math.random().toString(36).slice(2, 12).padEnd(10, "x");
-  const url = base + rand + "?token=" + m[1] + "&expiry=" + Date.now();
-  return { streams: [{ url, mime: "video/mp4", label: "Servidor 2" }], subs: [] };
+  return { streams: [{ url: base + rand + "?token=" + m[1] + "&expiry=" + Date.now(), mime: "video/mp4", label: "Servidor 2" }], subs: [] };
 }
 
 /* ---------- resolver ---------- */
@@ -554,12 +571,11 @@ export async function resolve(ref) {
   const html = await getText(pageUrl, { Referer: BASE + "/" });
   if (!html) throw kino.error("not_found", "ficha " + path);
 
-  let embeds = embedUrls(html);
-  if (!embeds.length) throw kino.error("not_found", "sin reproductores");
-  if (want > 0) embeds = [embeds[want - 1]].filter(Boolean);
+  const all = embedUrls(html);
+  if (!all.length) throw kino.error("not_found", "sin reproductores");
+  const embeds = want > 0 ? [all[want - 1]].filter(Boolean) : all;
   if (!embeds.length) throw kino.error("not_found", "opción " + want);
 
-  const all = embedUrls(html);
   let first = null;
   const errors = [];
   for (const embed of embeds) {
@@ -575,8 +591,7 @@ export async function resolve(ref) {
     }
   }
   if (!first) {
-    const code = errors.length ? "unavailable" : "not_found";
-    throw kino.error(code, "reproductores: " + errors.join(", "), {
+    throw kino.error(errors.length ? "unavailable" : "not_found", "reproductores: " + errors.join(", ").slice(0, 190), {
       userMessage: T(
         "El reproductor pidió una verificación que no se pudo completar. Intenta otra vez.",
         "The player asked for a check that could not be finished. Try again."
@@ -595,9 +610,9 @@ export async function resolve(ref) {
 
   const stream = {
     url: best.url,
-    mime: best.mime || undefined,
     headers: { Referer: new URL(embeds[0]).origin + "/", "User-Agent": UA },
   };
+  if (best.mime) stream.mime = best.mime;
   if (alts.length) stream.alternatives = alts.slice(0, 8);
   if (first.subs.length) stream.subtitles = first.subs;
   return stream;
