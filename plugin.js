@@ -1,5 +1,6 @@
 /* Pelistube — plugin de Kino
-   Catálogo: TubePelis. Reproductores: reproductor.php?v=<base64> → Byse / PlayMogo. */
+   Catálogo: TubePelis. Reproductores: reproductor.php?v=<base64> → Byse / PlayMogo.
+   La API de cada reproductor se descubre en su propio JavaScript. */
 
 const SITE = "https://www.tubepelis.com";
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -411,13 +412,34 @@ function clearPow(code) {
   }
 }
 
-/* ---------- reproductor Byse ---------- */
+/* ---------- Byse ---------- */
 
 function parseEmbed(embed) {
   const u = new URL(embed);
   const m = u.pathname.match(/\/e\/([A-Za-z0-9._~-]+)/);
   const seg = u.pathname.split("/").filter(Boolean);
   return { origin: u.origin, code: m ? m[1] : seg[seg.length - 1] || "" };
+}
+
+function parentUrl(embed) {
+  try {
+    return SITE + "/reproductor.php?v=" + btoa(embed).replace(/=+$/, "%3D%3D").replace(/^/, "");
+  } catch (e) {
+    return SITE + "/";
+  }
+}
+
+function byseHeaders(origin, embed, pageUrl, parent) {
+  const p = parent || parentUrl(embed);
+  return {
+    "X-Embed-Origin": "tubepelis.com",
+    "X-Embed-Referer": pageUrl,
+    "X-Embed-Parent": p,
+    Origin: origin,
+    Referer: p,
+    "X-Requested-With": "XMLHttpRequest",
+    Accept: "application/json",
+  };
 }
 
 function sourcesFrom(b) {
@@ -427,45 +449,67 @@ function sourcesFrom(b) {
     .map((s) => ({ url: s.url, mime: mimeOf(s.url, s.mime_type), label: s.label || s.quality || "" }));
 }
 
-function byseHeaders(origin, embed, pageUrl, parent) {
-  return {
-    "X-Embed-Origin": "tubepelis.com",
-    "X-Embed-Referer": pageUrl,
-    "X-Embed-Parent": parent || embed,
-    Origin: origin,
-    Referer: parent || embed,
-    "X-Requested-With": "XMLHttpRequest",
-    Accept: "application/json",
-  };
+function subsFrom(b) {
+  return (b && Array.isArray(b.tracks) ? b.tracks : [])
+    .filter((t) => t && typeof t.url === "string" && /^https:\/\//.test(t.url))
+    .map((t) => ({ url: t.url, label: t.title || t.language || "Subtítulos", mime: "text/vtt" }));
 }
 
-async function playback(api, h, fp, token) {
+async function unpack(j) {
+  if (!j) return { streams: [], subs: [], keys: [] };
+  let body = j;
+  if (body.playback) {
+    try {
+      body = JSON.parse(await decrypt(body.playback));
+    } catch (e) {
+      return { streams: [], subs: [], keys: ["playback!"], err: e && e.message ? e.message : "descifrado" };
+    }
+  }
+  return { streams: sourcesFrom(body), subs: subsFrom(body), keys: Object.keys(body || {}) };
+}
+
+function apiFrom(html, origin, code) {
+  const abs1 = html.match(/https?:\/\/[a-z0-9.-]+\/api\/videos\/([A-Za-z0-9._~-]+)/i);
+  if (abs1) {
+    return { base: abs1[0].slice(0, abs1[0].indexOf("/api/videos/") + 12), id: abs1[1] };
+  }
+  const rel = html.match(/["']\/api\/videos\/([A-Za-z0-9._~-]+)/);
+  if (rel) return { base: origin + "/api/videos/", id: rel[1] };
+  return { base: origin + "/api/videos/", id: code };
+}
+
+function methodsOf(html) {
+  const out = [];
+  const re = /method\s*:\s*["'](GET|POST|PUT)["']/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const v = m[1].toUpperCase();
+    if (out.indexOf(v) < 0) out.push(v);
+  }
+  return out;
+}
+
+async function call(url, methods, h, fp, token) {
   const hh = Object.assign({}, h);
   if (token) hh["X-Captcha-Token"] = token;
+  const list = methods.length ? methods : ["GET", "POST"];
   const q = "?fingerprint=" + encodeURIComponent(fp);
-  let r = await get(api + "embed/playback" + q, hh);
-  if (r.ok) return r;
-  let last = r;
-  r = await postJson(api + "embed/playback", hh, { fingerprint: fp });
-  if (r.ok) return r;
-  if (r.status !== 405) last = r;
-  r = await postForm(api + "embed/playback", hh, "fingerprint=" + encodeURIComponent(fp));
-  if (r.ok) return r;
-  if (r.status !== 405) last = r;
-  r = await get(api + "embed/playback/" + encodeURIComponent(fp), hh);
-  if (r.ok) return r;
-  return last;
+  let best = null;
+  for (const m of list) {
+    let r;
+    if (m === "GET") r = await get(url + q, hh);
+    else if (m === "PUT") r = await req(url, { method: "PUT", headers: Object.assign({ "Content-Type": "application/json" }, hh), body: JSON.stringify({ fingerprint: fp }) });
+    else r = await postJson(url, hh, { fingerprint: fp });
+    if (r.ok) return r;
+    if (!best || best.status === 405) best = r;
+  }
+  return best;
 }
 
-async function captcha(api, h, fp, code) {
-  let start = await postJson(api + "embed/captcha", h, { fingerprint: fp });
-  let sj = start.ok ? await start.json() : null;
-  if (!sj || !sj.pow_token) {
-    const g = await get(api + "embed/captcha?fingerprint=" + encodeURIComponent(fp), h);
-    sj = g.ok ? await g.json() : null;
-    if (!sj || !sj.pow_token) start = g;
-  }
-  if (!sj || !sj.pow_token) throw kino.error("rate_limited", "captcha " + start.status);
+async function captcha(url, methods, h, fp, code) {
+  let start = await call(url + "embed/captcha", methods, h, fp, "");
+  let sj = start && start.ok ? await start.json() : null;
+  if (!sj || !sj.pow_token) throw kino.error("rate_limited", "captcha " + (start ? start.status : 0));
   const tok = String(sj.pow_token);
   const st = powState(code);
   const from = st && st.t === tok ? st.n : 0;
@@ -474,68 +518,59 @@ async function captcha(api, h, fp, code) {
     savePow(code, tok, res.next || 0);
     throw kino.error("rate_limited", "pow agotado " + res.next);
   }
-  const check = await postJson(api + "embed/captcha/verify", h, {
-    pow_token: tok,
-    solution: res.solution,
-    fingerprint: fp,
-  });
-  const cj = check.ok ? await check.json() : null;
-  if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (cj && cj.status));
+  const check = await call(url + "embed/captcha/verify", methods, h, fp, "");
+  const cj = check && check.ok ? await check.json() : null;
+  if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (check ? check.status : 0));
   const t = String(cj.token);
   saveToken(code, t, Number(cj.expires_in || 0));
   clearPow(code);
   return t;
 }
 
-async function byse(embed, pageUrl, parent) {
+async function byse(embed, pageUrl, parent, warm) {
   const parsed = parseEmbed(embed);
   const origin = parsed.origin;
   const code = parsed.code;
   if (!code) throw kino.error("not_found", "embed sin código");
-  const api = origin + "/api/videos/" + encodeURIComponent(code) + "/";
-  const fp = fingerprint();
   const h = byseHeaders(origin, embed, pageUrl, parent);
 
-  const settings = await get(api + "embed/settings", h);
-  if (!settings.ok) throw kino.error("unavailable", "settings " + settings.status);
+  const emb = await get(embed, { Referer: h.Referer });
+  if (!emb.ok) throw kino.error("unavailable", "embed " + emb.status);
+  const html = await emb.text();
+  const api = apiFrom(html, origin, code);
+  const methods = methodsOf(html);
+  const url = api.base + encodeURIComponent(api.id) + "/";
 
-  const det = await get(api + "embed/details", h);
-  if (det.ok) {
-    const j = await det.json();
-    const direct = sourcesFrom(j);
-    if (direct.length) return { streams: direct, subs: [], origin: origin, embed: embed };
+  const settings = await call(url + "embed/settings", methods, h, fingerprint(), "");
+  if (!settings || !settings.ok) throw kino.error("unavailable", "settings " + (settings ? settings.status : 0) + " " + methods.join("") );
+
+  const fp = fingerprint();
+  const det = await call(url + "embed/details", methods, h, fp, "");
+  if (det && det.ok) {
+    const d = await unpack(await det.json());
+    if (d.streams.length) return { streams: d.streams, subs: d.subs, origin: origin, embed: embed };
+    if (warm) return { streams: [], subs: [], origin: origin, embed: embed };
   }
 
   let token = savedToken(code);
   let play = null;
   if (token) {
-    play = await playback(api, h, fp, token);
-    if (play.status === 401 || play.status === 403) token = "";
+    play = await call(url + "embed/playback", methods, h, fp, token);
+    if (play && (play.status === 401 || play.status === 403)) token = "";
   }
   if (!token) {
-    token = await captcha(api, h, fp, code);
-    play = await playback(api, h, fp, token);
+    token = await captcha(url, methods, h, fp, code);
+    if (warm) return { streams: [], subs: [], origin: origin, embed: embed };
+    play = await call(url + "embed/playback", methods, h, fp, token);
   }
   if (!play || !play.ok) throw kino.error("unavailable", "playback " + (play ? play.status : 0));
 
-  let body = await play.json();
-  if (!body) throw kino.error("unavailable", "cuerpo no json");
-  if (body.playback) {
-    try {
-      body = JSON.parse(await decrypt(body.playback));
-    } catch (e) {
-      throw kino.error("unavailable", "descifrado " + (e && e.message ? e.message : ""));
-    }
-  }
-  const streams = sourcesFrom(body);
-  if (!streams.length) throw kino.error("not_found", "sin fuentes [" + Object.keys(body).join(",") + "]");
-  const subs = (Array.isArray(body.tracks) ? body.tracks : [])
-    .filter((t) => t && typeof t.url === "string" && /^https:\/\//.test(t.url))
-    .map((t) => ({ url: t.url, label: t.title || t.language || "Subtítulos", mime: "text/vtt" }));
-  return { streams: streams, subs: subs, origin: origin, embed: embed };
+  const p = await unpack(await play.json());
+  if (!p.streams.length) throw kino.error("not_found", "sin fuentes [" + (p.err || p.keys.join(",")) + "]");
+  return { streams: p.streams, subs: p.subs, origin: origin, embed: embed };
 }
 
-/* ---------- reproductor Doodstream ---------- */
+/* ---------- Doodstream ---------- */
 
 async function dood(embed, pageUrl) {
   const origin = new URL(embed).origin;
@@ -717,7 +752,7 @@ async function play(c, pageUrl, depth) {
   if (/byseqekaho|playmogo|n1mwq/.test(h)) {
     let first = null;
     try {
-      return await byse(embed, pageUrl, c.parent);
+      return await byse(embed, pageUrl, c.parent, false);
     } catch (e) {
       first = e;
     }
@@ -893,11 +928,7 @@ export async function prepare(ref) {
     const list = candidates(await page(pageUrl), pageUrl);
     const cand = list.filter((c) => /byseqekaho|playmogo|n1mwq/.test(c.url))[0];
     if (!cand) return;
-    const parsed = parseEmbed(cand.url);
-    if (!parsed.code) return;
-    if (savedToken(parsed.code)) return;
-    const api = parsed.origin + "/api/videos/" + encodeURIComponent(parsed.code) + "/";
-    await captcha(api, byseHeaders(parsed.origin, cand.url, pageUrl, cand.parent), fingerprint(), parsed.code);
+    await byse(cand.url, pageUrl, cand.parent, true);
   } catch (e) {
     /* prepare nunca falla */
   }
