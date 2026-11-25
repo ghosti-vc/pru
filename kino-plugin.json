@@ -1,13 +1,23 @@
 {
   "id": "pelistube",
   "name": "Pelistube",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
   "description": "Películas y series en español latino de TubePelis, con sus dos reproductores.",
   "author": "ghosti-vc",
-  "hosts": ["www.tubepelis.com", "tubepelis.com", "byseqekaho.com", "playmogo.com", "n1mwq.org"],
+  "hosts": [
+    "www.tubepelis.com",
+    "tubepelis.com",
+    "byseqekaho.com",
+    "playmogo.com",
+    "n1mwq.org",
+    "dood.xxx",
+    "dood.watch",
+    "doodstream.com",
+    "dsvplay.com"
+  ],
   "streamHosts": "any",
   "capabilities": ["home", "search", "browse", "episodes", "resolve"],
   "categories": ["movies", "series"]
