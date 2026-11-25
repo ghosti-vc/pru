@@ -1,6 +1,6 @@
 /* Pelistube — plugin de Kino
    Catálogo: TubePelis. Reproductores: reproductor.php?v=<base64> → Byse / PlayMogo.
-   La API de cada reproductor se descubre en su propio JavaScript. */
+   La API y los métodos se descubren en el JavaScript del propio reproductor. */
 
 const SITE = "https://www.tubepelis.com";
 const UA = "Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -123,6 +123,15 @@ function stripTags(s) {
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function snippet(html, word, n) {
+  const s = String(html);
+  const i = s.toLowerCase().indexOf(String(word).toLowerCase());
+  if (i < 0) return "-" + word;
+  let out = s.slice(Math.max(0, i - n), i + n);
+  out = out.replace(/[\r\n\t]+/g, " ").replace(/["']/g, "").replace(/\s+/g, " ").trim();
+  return out;
 }
 
 function yearOf(s) {
@@ -423,7 +432,10 @@ function parseEmbed(embed) {
 
 function parentUrl(embed) {
   try {
-    return SITE + "/reproductor.php?v=" + btoa(embed).replace(/=+$/, "%3D%3D").replace(/^/, "");
+    const b = btoa(embed);
+    const pad = (b.match(/=+$/) || [""])[0].length;
+    const core = b.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    return SITE + "/reproductor.php?v=" + core + "%3D".repeat(pad);
   } catch (e) {
     return SITE + "/";
   }
@@ -470,9 +482,7 @@ async function unpack(j) {
 
 function apiFrom(html, origin, code) {
   const abs1 = html.match(/https?:\/\/[a-z0-9.-]+\/api\/videos\/([A-Za-z0-9._~-]+)/i);
-  if (abs1) {
-    return { base: abs1[0].slice(0, abs1[0].indexOf("/api/videos/") + 12), id: abs1[1] };
-  }
+  if (abs1) return { base: abs1[0].slice(0, abs1[0].indexOf("/api/videos/") + 12), id: abs1[1] };
   const rel = html.match(/["']\/api\/videos\/([A-Za-z0-9._~-]+)/);
   if (rel) return { base: origin + "/api/videos/", id: rel[1] };
   return { base: origin + "/api/videos/", id: code };
@@ -489,7 +499,7 @@ function methodsOf(html) {
   return out;
 }
 
-async function call(url, methods, h, fp, token) {
+async function call(url, methods, h, fp, token, body) {
   const hh = Object.assign({}, h);
   if (token) hh["X-Captcha-Token"] = token;
   const list = methods.length ? methods : ["GET", "POST"];
@@ -498,18 +508,25 @@ async function call(url, methods, h, fp, token) {
   for (const m of list) {
     let r;
     if (m === "GET") r = await get(url + q, hh);
-    else if (m === "PUT") r = await req(url, { method: "PUT", headers: Object.assign({ "Content-Type": "application/json" }, hh), body: JSON.stringify({ fingerprint: fp }) });
-    else r = await postJson(url, hh, { fingerprint: fp });
+    else if (m === "PUT") r = await req(url, { method: "PUT", headers: Object.assign({ "Content-Type": "application/json" }, hh), body: JSON.stringify(body || { fingerprint: fp }) });
+    else r = await postJson(url, hh, body || { fingerprint: fp });
     if (r.ok) return r;
     if (!best || best.status === 405) best = r;
   }
   return best;
 }
 
-async function captcha(url, methods, h, fp, code) {
+async function captcha(url, methods, h, fp, code, html) {
   let start = await call(url + "embed/captcha", methods, h, fp, "");
   let sj = start && start.ok ? await start.json() : null;
-  if (!sj || !sj.pow_token) throw kino.error("rate_limited", "captcha " + (start ? start.status : 0));
+  if (!sj || !sj.pow_token) {
+    const rich = { fingerprint: fp, code: code, origin: "tubepelis.com", parent: h["X-Embed-Parent"], referer: h["X-Embed-Referer"] };
+    const r2 = await postJson(url + "embed/captcha", h, rich);
+    sj = r2.ok ? await r2.json() : null;
+    if (!sj || !sj.pow_token) {
+      throw kino.error("rate_limited", ("captcha " + (start ? start.status : 0) + "/" + r2.status + " [" + snippet(html, "captcha", 70) + "] " + snippet(html, "fingerprint", 40)).slice(0, 190));
+    }
+  }
   const tok = String(sj.pow_token);
   const st = powState(code);
   const from = st && st.t === tok ? st.n : 0;
@@ -518,9 +535,10 @@ async function captcha(url, methods, h, fp, code) {
     savePow(code, tok, res.next || 0);
     throw kino.error("rate_limited", "pow agotado " + res.next);
   }
-  const check = await call(url + "embed/captcha/verify", methods, h, fp, "");
+  const payload = { pow_token: tok, solution: res.solution, fingerprint: fp, code: code };
+  const check = await call(url + "embed/captcha/verify", methods, h, fp, "", payload);
   const cj = check && check.ok ? await check.json() : null;
-  if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (check ? check.status : 0));
+  if (!cj || cj.status !== "ok" || !cj.token) throw kino.error("rate_limited", "verify " + (check ? check.status : 0) + " [" + snippet(html, "verify", 60) + "]");
   const t = String(cj.token);
   saveToken(code, t, Number(cj.expires_in || 0));
   clearPow(code);
@@ -540,11 +558,13 @@ async function byse(embed, pageUrl, parent, warm) {
   const api = apiFrom(html, origin, code);
   const methods = methodsOf(html);
   const url = api.base + encodeURIComponent(api.id) + "/";
-
-  const settings = await call(url + "embed/settings", methods, h, fingerprint(), "");
-  if (!settings || !settings.ok) throw kino.error("unavailable", "settings " + (settings ? settings.status : 0) + " " + methods.join("") );
-
   const fp = fingerprint();
+
+  const settings = await call(url + "embed/settings", methods, h, fp, "");
+  if (!settings || !settings.ok) {
+    throw kino.error("unavailable", ("settings " + (settings ? settings.status : 0) + " [" + snippet(html, "api/", 80) + "]").slice(0, 190));
+  }
+
   const det = await call(url + "embed/details", methods, h, fp, "");
   if (det && det.ok) {
     const d = await unpack(await det.json());
@@ -559,7 +579,7 @@ async function byse(embed, pageUrl, parent, warm) {
     if (play && (play.status === 401 || play.status === 403)) token = "";
   }
   if (!token) {
-    token = await captcha(url, methods, h, fp, code);
+    token = await captcha(url, methods, h, fp, code, html);
     if (warm) return { streams: [], subs: [], origin: origin, embed: embed };
     play = await call(url + "embed/playback", methods, h, fp, token);
   }
@@ -759,7 +779,7 @@ async function play(c, pageUrl, depth) {
     try {
       return await generic(embed, pageUrl);
     } catch (e2) {
-      throw kino.error("unavailable", ("byse " + (first && first.message ? first.message : "") + " / gen " + (e2 && e2.message ? e2.message : "")).slice(0, 150));
+      throw kino.error("unavailable", ("byse " + (first && first.message ? first.message : "") + " / gen " + (e2 && e2.message ? e2.message : "")).slice(0, 170));
     }
   }
   return await generic(embed, pageUrl);
