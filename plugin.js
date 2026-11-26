@@ -934,36 +934,200 @@ function firstSuccess(tasks) {
 }
 
 
-// ---- Respaldo: AllCalidad ----------------------------------------------------------------------
-async function acResolve(id, season, ep, deadline) {
-  const type = season ? "series" : "movie";
-  const left = () => deadline - Date.now();
-  const d = await getJson(CINEMETA + "/meta/" + type + "/" + id + ".json");
-  const meta = d.meta || {};
-  const title = String(meta.name || "").trim();
-  const year = parseInt(meta.year || meta.releaseInfo, 10) || 0;
-  if (!title) return null;
-  const items = await acSearch(title);
-  const want = normTitle(title);
-  const kind = type === "series" ? "series" : "movie";
-  const pool = items.filter((it) => it.kind === kind && normTitle(it.title) === want);
-  const pick = pool.find((it) => year && it.year === year) || pool.find((it) => !year || !it.year || Math.abs(it.year - year) <= 1) || null;
-  const tmdb = parseInt(meta.moviedb_id, 10) || 0;
+// ---- PelisGO como respaldo (método del plugin que sí reproduce) ----------------------------------
+const PG = "https://pelisgo.online";
+const PG_LANG = { cmm5jys20000d12uxchnk1lg7: 0, cmm5jys2d000e12ux0nymuwh4: 1 };
+async function getText(url, headers) {
+  const r = await kino.fetch(url, { headers: Object.assign({ "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "Accept-Language": "es-ES,es;q=0.9" }, headers || {}), timeoutMs: 8000 });
+  if (!r.ok) throw kino.error("unavailable", "http " + r.status);
+  return await r.text();
+}
+function rscText(h) {
+  let t = "";
+  const re = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\[\s\S])*)"\]\)/g;
+  let m;
+  while ((m = re.exec(h))) t += jsonStr(m[1]);
+  return t;
+}
+function pgHeaders(referer) {
+  return { Origin: PG, Accept: "*/*", "Accept-Language": "es-ES,es;q=0.9", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin", "X-Requested-With": "XMLHttpRequest", Referer: referer || PG + "/", "User-Agent": UA };
+}
+let pgTok = { token: null, exp: 0 };
+async function pgToken() {
+  const now = Date.now();
+  if (pgTok.token && now < pgTok.exp) return pgTok.token;
+  try {
+    const r = await kino.fetch(PG + "/api/session/sync", { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, pgHeaders()), timeoutMs: 8000 });
+    const txt = await r.text();
+    if (!r.ok) return null;
+    const j = JSON.parse(txt);
+    const tok = j && (j.sid || j.sessionId || j.token);
+    if (tok) { pgTok = { token: String(tok), exp: now + 9 * 60 * 1000 }; return pgTok.token; }
+  } catch (e) { kino.log("pg: session/sync falló " + String((e && e.message) || e).slice(0, 50)); }
+  return null;
+}
+function walkLinks(o, out, lang) {
+  if (!o || typeof o !== "object") return;
+  if (Array.isArray(o)) { o.forEach((x) => walkLinks(x, out, lang)); return; }
+  let l = lang;
+  const lg = o.languageId || (o.language && (typeof o.language === "string" ? o.language : o.language.id || o.language.name)) || o.lang;
+  if (lg) l = PG_LANG[lg] !== undefined ? PG_LANG[lg] : langRank(lg);
+  const u = o.url || o.embedUrl || o.embed_url || o.link;
+  if (typeof u === "string" && /^https?:\/\//i.test(u) && !/\.(jpe?g|png|webp|gif)(\?|$)/i.test(u) && !o.isBroken) out.push({ url: u, lang: l === undefined ? 0 : l, label: "PelisGO · " + LANG_NAME[l === undefined ? 0 : l], referer: PG + "/" });
+  Object.keys(o).forEach((k) => { if (o[k] && typeof o[k] === "object") walkLinks(o[k], out, l); });
+}
+async function pgStream(kind, id, referer) {
+  const url = PG + (kind === "episode" ? "/api/series/episode/" + enc(id) + "/stream" : "/api/movies/" + enc(id) + "/stream");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await pgToken();
+    const h = pgHeaders(referer);
+    if (token) h["x-session-id"] = token;
+    const r = await kino.fetch(url, { headers: h, timeoutMs: 8000 });
+    const txt = await r.text();
+    let j = null;
+    try { j = JSON.parse(txt); } catch (e) { j = null; }
+    kino.log("pg: stream " + kind + " intento " + (attempt + 1) + " status=" + r.status + " bytes=" + txt.length);
+    if (r.status === 401 || r.status === 403 || (j && typeof j.error === "string" && /sesi[oó]n/i.test(j.error))) { pgTok = { token: null, exp: 0 }; continue; }
+    if (!r.ok || !j) return [];
+    const out = [];
+    walkLinks(j, out, undefined);
+    return out;
+  }
+  return [];
+}
+function pgLinks(t, ownId) {
+  const out = [];
+  const re = /\{"id":"[a-z0-9]+","name":[^{}]*?"url":"(https?:[^"]+)"[^{}]*?\}/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const o = m[0];
+    if (/"isBroken":true/.test(o)) continue;
+    const ep = /"episodeId":(?:null|"(\w+)")/.exec(o);
+    if (ownId && ep && ep[1] && ep[1] !== ownId) continue;
+    const lg = /"languageId":"(\w+)"/.exec(o);
+    const lang = lg && PG_LANG[lg[1]] !== undefined ? PG_LANG[lg[1]] : 2;
+    out.push({ url: jsonStr(m[1]), lang, label: "PelisGO · " + LANG_NAME[lang], referer: PG + "/" });
+  }
+  return out;
+}
+async function pgSearch(q) {
+  const r = await kino.fetch(PG + "/api/search?q=" + enc(q) + "&limit=24", { headers: pgHeaders(), timeoutMs: 7000 });
+  if (!r.ok) throw kino.error("unavailable", "pg búsqueda " + r.status);
+  const j = JSON.parse(await r.text());
+  const out = [];
+  for (const x of (j && Array.isArray(j.results) ? j.results : [])) {
+    if (!x || !x.id || !x.slug) continue;
+    const isMovie = !(x.type === "serie" || x.type === "series" || x.type === "tv");
+    const it = mkItem("pg", isMovie ? "movie" : "series", enc(x.slug) + (isMovie ? "|" + x.id : ""), x.title, x.poster, x.year);
+    if (it) out.push(it);
+  }
+  kino.log("pg: búsqueda '" + String(q).slice(0, 30) + "' -> " + out.length);
+  return out;
+}
+async function pgEpisodeRef(slug, season, ep) {
+  const h = await getText(PG + "/series/" + slug + "/temporada/1/episodio/1", { Referer: PG + "/" });
+  const t = rscText(h);
+  let found = null;
+  const re = new RegExp("/series/" + slug.replace(/[^\w-]/g, "") + "/temporada/(\\d+)/episodio/(\\d+)", "g");
+  let m;
+  while ((m = re.exec(h))) if (+m[1] === season && +m[2] === ep) { found = true; break; }
+  const seasons = (function () {
+    const i = t.indexOf('"seasons":'); if (i < 0) return null;
+    const s = t.indexOf("[", i); if (s < 0) return null;
+    let depth = 0, inStr = false;
+    for (let k = s; k < t.length; k++) {
+      const c = t.charAt(k);
+      if (inStr) { if (c === "\\") k++; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true; else if (c === "[") depth++; else if (c === "]") { depth--; if (depth === 0) { try { return JSON.parse(t.slice(s, k + 1)); } catch (e) { return null; } } }
+    }
+    return null;
+  })();
+  if (seasons) for (const s of seasons) for (const e of (s.episodes || [])) if ((Number(s.number) || 1) === season && (Number(e.number) || 0) === ep) found = true;
+  return found ? "e|" + enc(slug) + "|" + season + "|" + ep : null;
+}
+async function pgCandidates(spec) {
+  const p = spec.split("|");
+  if (p[0] === "e") {
+    const slug = dec(p[1]);
+    const page = PG + "/series/" + slug + "/temporada/" + p[2] + "/episodio/" + p[3];
+    const t = rscText(await getText(page, { Referer: PG + "/" }));
+    const own = (/"episodeId":"(\w+)","episodeTitle"/.exec(t) || [])[1];
+    let found = pgLinks(t, own);
+    if (!found.length && own) {
+      try { found = await pgStream("episode", own, page); } catch (e) { kino.log("pg: stream de capítulo falló " + String((e && e.message) || e).slice(0, 50)); }
+    }
+    return found;
+  }
+  const slug = dec(p[1]);
+  const page = PG + "/movies/" + slug;
   let cands = [];
-  if (!pick) {
-    kino.log("respaldo AllCalidad: no encontré '" + title.slice(0, 30) + "'" + (type === "movie" && tmdb ? ", pruebo el reproductor por TMDB" : ""));
-    if (type !== "movie" || !tmdb) return null;
-    cands = [{ url: "https://videoapp.zip/e/movie/" + tmdb, lang: 0, label: "AllCalidad · videoapp · Latino", referer: AC + "/" }];
+  try { cands = await pgStream("movie", p[2], page); } catch (e) { kino.log("pg: api stream falló " + String((e && e.message) || e).slice(0, 50)); }
+  if (!cands.length) { try { cands = pgLinks(rscText(await getText(page, { Referer: PG + "/" })), null); } catch (e) { /* sin página */ } }
+  return cands;
+}
+
+// ---- Título en español (Wikidata, por el número de IMDb) para buscar en los respaldos --------------
+async function wikiGet(url) {
+  const r = await kino.fetch(url, { headers: { Accept: "application/json", "User-Agent": "PelisKRONOS-Kino/0.1 (plugin de Kino; contacto Ghosti-vc)" }, timeoutMs: 4500 });
+  if (!r.ok) throw kino.error("unavailable", "wikidata " + r.status);
+  return JSON.parse(await r.text());
+}
+async function altTitles(imdb) {
+  const s = await wikiGet("https://www.wikidata.org/w/api.php?action=query&list=search&srsearch=" + enc("haswbstatement:P345=" + imdb) + "&format=json&origin=*");
+  const q = s && s.query && s.query.search && s.query.search[0] && s.query.search[0].title;
+  if (!q) return [];
+  const e = await wikiGet("https://www.wikidata.org/w/api.php?action=wbgetentities&ids=" + enc(q) + "&props=labels|aliases&languages=es|es-mx|es-419&format=json&origin=*");
+  const ent = e && e.entities && e.entities[q];
+  const out = [];
+  const add = (t) => { t = String(t || "").trim(); if (t && out.indexOf(t) < 0) out.push(t); };
+  for (const l of ["es", "es-mx", "es-419"]) if (ent && ent.labels && ent.labels[l]) add(ent.labels[l].value);
+  for (const l of ["es", "es-mx", "es-419"]) for (const a of (ent && ent.aliases && ent.aliases[l]) || []) add(a.value);
+  kino.log("títulos en español: " + out.length + (out[0] ? " (" + out[0].slice(0, 30) + ")" : ""));
+  return out.slice(0, 3);
+}
+const INFO = {};
+function backupInfo(id, type) {
+  if (INFO[id]) return INFO[id];
+  const p = (async () => {
+    const d = await getJson(CINEMETA + "/meta/" + type + "/" + id + ".json");
+    const meta = d.meta || {};
+    const info = {
+      title: String(meta.name || "").trim(),
+      year: parseInt(meta.year || meta.releaseInfo, 10) || 0,
+      tmdb: parseInt(meta.moviedb_id, 10) || 0,
+    };
+    info.alts = altTitles(id).catch((e) => { kino.log("títulos en español: " + String((e && e.message) || e).slice(0, 40)); return []; });
+    return info;
+  })();
+  p.catch(() => { delete INFO[id]; });
+  INFO[id] = p;
+  return p;
+}
+// Busca primero con el título de Cinemeta; si no aparece, prueba con el título en español.
+async function findPick(info, search, kind, tag) {
+  const year = info.year;
+  const match = (items, titles) => {
+    const want = titles.map(normTitle).filter(Boolean);
+    const pool = items.filter((it) => it.kind === kind && want.indexOf(normTitle(it.title)) >= 0);
+    return pool.find((it) => year && it.year === year) || pool.find((it) => !year || !it.year || Math.abs(it.year - year) <= 1) || null;
+  };
+  let items = await search(info.title).catch(() => []);
+  let pick = match(items, [info.title]);
+  if (pick) return pick;
+  const alts = await withTimeout(info.alts, 3500).catch(() => []);
+  for (const t of alts) {
+    if (normTitle(t) === normTitle(info.title)) continue;
+    items = await search(t).catch(() => []);
+    pick = match(items, [info.title].concat(alts));
+    if (pick) { kino.log("respaldo " + tag + ": encontrado con '" + t.slice(0, 30) + "'"); return pick; }
   }
-  let spec = pick ? "m|" + pick.ref.split("|")[2] : "";
-  if (pick && type === "series") {
-    const eps = (await acEpisodes(pick.ref.split("|")[2])).episodes;
-    const e = eps.find((x) => x.season === season && x.number === ep);
-    if (!e) { kino.log("respaldo AllCalidad: sin el episodio " + season + "x" + ep); return null; }
-    spec = "e|" + e.ref.split("|")[2];
-  }
-  if (pick) cands = await acCandidates(spec);
+  return null;
+}
+// Prueba los servidores de un respaldo: primero el mejor idioma, luego el resto; devuelve el primero que abre.
+async function playCands(cands, deadline, tag) {
+  const left = () => deadline - Date.now();
   const bad = /dood|pinup|agl00\d\.com|playmogo|mixdrop|susanexpect|nupload|netu|waaw|hqq/i;
+  cands = cands.filter((c) => !c.cap);
   const usable = cands.filter((c) => !bad.test(hostOf(c.url)));
   if (usable.length) cands = usable;
   cands.sort((a, b) => ((a.lang || 0) * 10 + rank(a.url)) - ((b.lang || 0) * 10 + rank(b.url)));
@@ -974,7 +1138,7 @@ async function acResolve(id, season, ep, deadline) {
       v = await embedFromHtml(c.url, 0, c.referer || REF);
       if (v && !(await verifyMedia(v))) v = null;
     }
-    if (v) { v.label = c.label; kino.log("respaldo AllCalidad: ganó " + hostOf(c.url) + " " + (c.label || "")); }
+    if (v) { v.label = c.label; kino.log("respaldo " + tag + ": ganó " + hostOf(c.url) + " " + (c.label || "")); }
     return v;
   };
   const minLang = cands.length ? Math.min.apply(null, cands.map((c) => c.lang || 0)) : 0;
@@ -985,6 +1149,45 @@ async function acResolve(id, season, ep, deadline) {
     if (r && r.v) return r.v;
   }
   return null;
+}
+async function acResolve(id, season, ep, deadline) {
+  const type = season ? "series" : "movie";
+  const info = await backupInfo(id, type);
+  if (!info.title) return null;
+  const kind = type === "series" ? "series" : "movie";
+  const pick = await findPick(info, (q) => acSearch(q), kind, "AllCalidad");
+  let cands = [];
+  if (!pick) {
+    kino.log("respaldo AllCalidad: no encontré '" + info.title.slice(0, 30) + "'" + (type === "movie" && info.tmdb ? ", pruebo el reproductor por TMDB" : ""));
+    if (type !== "movie" || !info.tmdb) return null;
+    cands = [{ url: "https://videoapp.zip/e/movie/" + info.tmdb, lang: 0, label: "AllCalidad · videoapp · Latino", referer: AC + "/" }];
+  }
+  let spec = pick ? "m|" + pick.ref.split("|")[2] : "";
+  if (pick && type === "series") {
+    const eps = (await acEpisodes(pick.ref.split("|")[2])).episodes;
+    const e = eps.find((x) => x.season === season && x.number === ep);
+    if (!e) { kino.log("respaldo AllCalidad: sin el episodio " + season + "x" + ep); return null; }
+    spec = "e|" + e.ref.split("|")[2];
+  }
+  if (pick) cands = await acCandidates(spec);
+  return await playCands(cands, deadline, "AllCalidad");
+}
+async function pgResolve(id, season, ep, deadline) {
+  const type = season ? "series" : "movie";
+  const info = await backupInfo(id, type);
+  if (!info.title) return null;
+  const kind = type === "series" ? "series" : "movie";
+  const pick = await findPick(info, pgSearch, kind, "PelisGO");
+  if (!pick) { kino.log("respaldo PelisGO: no encontré '" + info.title.slice(0, 30) + "'"); return null; }
+  const p = pick.ref.split("|");
+  let spec;
+  if (type === "series") {
+    spec = await pgEpisodeRef(dec(p[2]), season, ep);
+    if (!spec) { kino.log("respaldo PelisGO: sin el episodio " + season + "x" + ep); return null; }
+  } else spec = "m|" + p[2] + "|" + p[3];
+  const cands = await pgCandidates(spec);
+  kino.log("respaldo PelisGO: servidores " + cands.length + " " + cands.map((c) => hostOf(c.url)).join(","));
+  return await playCands(cands, deadline, "PelisGO");
 }
 
 export async function resolve(ref) {
@@ -998,12 +1201,16 @@ export async function resolve(ref) {
   const deadline = t0 + 19000;
   let acP = null;
   const startAc = () => {
-    if (!acP) acP = acResolve(id, season, ep, deadline).catch((e) => { kino.log("respaldo AllCalidad falló: " + String((e && e.message) || e).slice(0, 60)); return null; });
+    if (!acP) {
+      const one = (name, fn) => fn(id, season, ep, deadline).catch((e) => { kino.log("respaldo " + name + " falló: " + String((e && e.message) || e).slice(0, 60)); return null; });
+      // AllCalidad y PelisGO arrancan juntos; gana el primero que entregue un video que abre.
+      acP = firstSuccess([one("AllCalidad", acResolve), one("PelisGO", pgResolve)]).then((r) => (r && r.v) || null);
+    }
     return acP;
   };
   const main = primary(ref, t0);
   main.catch(() => {});
-  // Prioridad: el addon. Si tarda más de 3,5 s, AllCalidad arranca en paralelo (queda listo por si el addon falla).
+  // Prioridad: el addon. Si tarda más de 3,5 s, los respaldos (AllCalidad y PelisGO) arrancan en paralelo.
   let settled = false;
   main.then(() => { settled = true; }, () => { settled = true; });
   if (typeof kino.sleep === "function") {
@@ -1015,7 +1222,7 @@ export async function resolve(ref) {
   try {
     return await main;
   } catch (e) {
-    kino.log("addon principal sin video (" + String((e && e.message) || e).slice(0, 50) + "): uso AllCalidad");
+    kino.log("addon principal sin video (" + String((e && e.message) || e).slice(0, 50) + "): uso los respaldos");
     const v = await startAc();
     if (v) return v;
     throw e;
