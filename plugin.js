@@ -1,8 +1,9 @@
 // PelisMXL — plugin de Kino.
 // Catálogo por kino.tmdb (sin clave en el código). Enlaces por la API de MXL.
-// La API de MXL está detrás de un WAF de Cloudflare que solo deja pasar OkHttp:
-// todas las peticiones van con User-Agent okhttp/4.12.0 y se reintentan en los
-// tres hosts del servicio antes de darse por vencidas.
+// La API de MXL está detrás de un WAF de Cloudflare que solo deja pasar OkHttp
+// 4.12.0 nativo en Android: ni Chrome, ni curl, ni Kino pasan el filtro. Por eso
+// el plugin puede ir por el proxy OkHttp que corre en Termux (ajuste "proxy",
+// formato /proxy/{dominio}/{ruta}). Si no hay proxy, o falla, se intenta directo.
 
 const UA = "okhttp/4.12.0";
 const APPID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
@@ -24,6 +25,8 @@ function tmdbLang() { return en() ? "en-US" : "es-ES"; }
 const MSG = {
   down: ["El servidor de MXL no responde ahora. Inténtalo más tarde.",
          "MXL is not answering right now. Try again later."],
+  proxy: ["El proxy del celular no responde. Revísalo en Termux.",
+          "The phone proxy is not answering. Check it in Termux."],
   empty: ["Este título no tiene ningún servidor disponible.",
           "This title has no server available."]
 };
@@ -63,6 +66,10 @@ function blocked(body) {
     .test(String(body || "").slice(0, 900));
 }
 
+function proxyFailed(body) {
+  return /"(upstream_error|proxy_error)"/.test(String(body || "").slice(0, 200));
+}
+
 function apiHeaders() {
   return {
     "User-Agent": UA,
@@ -76,31 +83,79 @@ async function bodyOf(r) {
   try { return JSON.stringify(await r.json()); } catch (e) { return ""; }
 }
 
+// Dirección del proxy, sin la barra final. Vacía cuando no hay.
+function proxyBase() {
+  let raw = "";
+  try { raw = String(kino.config.get("proxy") || "").trim(); } catch (e) { return ""; }
+  if (!raw) return "";
+  if (raw.indexOf("http://") !== 0 && raw.indexOf("https://") !== 0) raw = "http://" + raw;
+  return raw.replace(/\/+$/, "");
+}
+
+function viaProxy(base, url) {
+  return base + "/proxy/" + String(url).replace(/^https?:\/\//, "");
+}
+
+// Pide un texto: primero por el proxy si está puesto, después directo.
+async function getText(url, headers) {
+  const h = headers || {};
+  const base = proxyBase();
+  if (base) {
+    try {
+      const r = await kino.fetch(viaProxy(base, url), { headers: h });
+      const text = await bodyOf(r);
+      if (text && !proxyFailed(text)) return text;
+    } catch (e) {}
+  }
+  const r = await kino.fetch(url, { headers: h });
+  return bodyOf(r);
+}
+
 // Una ruta de la API de MXL, probando los tres hosts del servicio.
 async function mxlJson(path) {
   const sep = path.indexOf("?") === -1 ? "?" : "&";
   const full = path + sep + "appid=" + APPID;
+  const base = proxyBase();
   let last = "";
+  let tried = 0;
+
   for (let i = 0; i < API.length; i++) {
-    let r;
+    if (base) {
+      tried++;
+      try {
+        const r = await kino.fetch(viaProxy(base, API[i] + full), { headers: apiHeaders() });
+        const text = await bodyOf(r);
+        if (text && !proxyFailed(text) && !blocked(text)) {
+          try {
+            const data = JSON.parse(text);
+            if (data) return data;
+            last = "vacío";
+          } catch (e) { last = "json"; }
+        } else {
+          last = proxyFailed(text) ? "proxy" : "bloqueado";
+        }
+      } catch (e) {
+        last = "proxy";
+      }
+    }
+    tried++;
     try {
-      r = await kino.fetch(API[i] + full, { headers: apiHeaders() });
+      const r = await kino.fetch(API[i] + full, { headers: apiHeaders() });
+      const text = await bodyOf(r);
+      if (blocked(text)) { last = "bloqueado"; continue; }
+      if (!r.ok) { last = "http " + r.status; continue; }
+      try {
+        const data = JSON.parse(text);
+        if (data) return data;
+        last = "vacío";
+      } catch (e) { last = "json"; }
     } catch (e) {
       last = (e && e.code) || "red";
-      continue;
-    }
-    const text = await bodyOf(r);
-    if (blocked(text)) { last = "bloqueado"; continue; }
-    if (!r.ok) { last = "http " + r.status; continue; }
-    try {
-      const data = JSON.parse(text);
-      if (data) return data;
-      last = "vacío";
-    } catch (e) {
-      last = "json";
     }
   }
-  log("mxl sin respuesta", path, last);
+
+  log("mxl sin respuesta", path, last, "intentos", tried);
+  if (last === "proxy") throw kino.error("unavailable", "mxl proxy", { userMessage: pick(MSG.proxy) });
   throw kino.error("unavailable", "mxl " + last, { userMessage: pick(MSG.down) });
 }
 
@@ -252,8 +307,7 @@ async function validateM3u8(url, referer) {
   try {
     const h = { "User-Agent": UA, "Accept": "*/*", "Range": "bytes=0-2048" };
     if (referer) h.Referer = referer;
-    const r = await kino.fetch(url, { headers: h });
-    const text = await bodyOf(r);
+    const text = await getText(url, h);
     return text.indexOf("#EXTM3U") !== -1;
   } catch (e) {
     return false;
@@ -297,10 +351,9 @@ async function playable(url) {
 
   let text = "";
   try {
-    const r = await kino.fetch(u, {
-      headers: { "User-Agent": UA, "Referer": origin + "/", "Origin": origin, "Accept": "*/*" }
+    text = await getText(u, {
+      "User-Agent": UA, "Referer": origin + "/", "Origin": origin, "Accept": "*/*"
     });
-    text = await bodyOf(r);
   } catch (e) {
     return null;
   }
@@ -317,7 +370,7 @@ async function playable(url) {
     if (await validateM3u8(lists[i], u)) return { url: lists[i], mime: "application/vnd.apple.mpegurl" };
   }
   const files = mp4In(flat);
-  for (let i = 0; i < files.length; i++) return { url: files[i], mime: "video/mp4" };
+  if (files.length) return { url: files[0], mime: "video/mp4" };
 
   const iframe = /<iframe[^>]+src=["']([^"']+)["']/i.exec(text);
   if (iframe && iframe[1]) {
