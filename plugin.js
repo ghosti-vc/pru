@@ -254,16 +254,27 @@ function epItem(tmdb, season, episode, label) {
   };
 }
 
+function pushRange(items, tmdb, seasons, total) {
+  const per = Math.max(1, Math.ceil(total / Math.max(1, seasons)));
+  for (let s = 1; s <= seasons; s++) {
+    for (let e = 1; e <= per; e++) {
+      if (items.length >= 3000) return;
+      items.push(epItem(tmdb, s, e, ""));
+    }
+  }
+}
+
 export async function episodes(ref) {
   await kino.sleep(0);
   const tmdb = String(ref).split("-")[1];
-  const items = [];
-  const why = [];
   if (!tmdb) {
     throw kino.error("not_found", "sin id", {
       userMessage: t("No pude abrir esta serie.", "Could not open this series."),
     });
   }
+
+  const items = [];
+  const why = [];
 
   if (typeof kino.tmdb === "function") {
     try {
@@ -285,15 +296,12 @@ export async function episodes(ref) {
   if (!items.length) {
     try {
       const j = await jsonGet(API + "/wordpress/lookup?type=tv&tmdb=" + encodeURIComponent(tmdb));
-      const it = j && j.item;
-      why.push("lookup:" + (it ? "ok" : "vacio"));
+      const it = j && (j.item || j);
+      why.push("lookup:" + (it && it.title ? "ok" : "vacio"));
       if (it) {
         const seasons = Math.max(1, Number(it.number_of_seasons) || 1);
         const total = Math.max(1, Number(it.number_of_episodes) || 1);
-        const per = Math.max(1, Math.ceil(total / seasons));
-        for (let s = 1; s <= seasons; s++) {
-          for (let e = 1; e <= per; e++) items.push(epItem(tmdb, s, e, ""));
-        }
+        pushRange(items, tmdb, seasons, total);
       }
     } catch (e) {
       why.push("lookup:" + ((e && e.code) || "err"));
@@ -301,10 +309,13 @@ export async function episodes(ref) {
   }
 
   if (!items.length) {
+    why.push("vacio");
     throw kino.error("not_found", why.join(","), {
       userMessage: t("No pude listar los episodios.", "Could not list the episodes."),
     });
   }
+
+  kino.log("cine3", "episodios", tmdb, items.length);
   return { items };
 }
 
@@ -348,6 +359,15 @@ function subsFrom(html) {
   return out;
 }
 
+function streamHeaders() {
+  return {
+    Referer: "https://" + PLAYER_HOST + "/",
+    Origin: "https://" + PLAYER_HOST,
+    "User-Agent": UA,
+    Accept: "*/*",
+  };
+}
+
 // ---------- resolve ----------
 export async function resolve(ref) {
   await kino.sleep(0);
@@ -386,14 +406,15 @@ export async function resolve(ref) {
     });
   }
 
+  const headers = streamHeaders();
   const stream = {
     url,
     mime: /\.mp4(\?|$)/i.test(url) ? "video/mp4" : "application/vnd.apple.mpegurl",
-    headers: { Referer: "https://" + PLAYER_HOST + "/" },
+    headers,
   };
 
   const subs = subsFrom(html);
-  if (subs.length) stream.subtitles = subs;
+  if (subs.length) stream.subtitles = subs.map((s) => ({ url: s.url, label: s.label, lang: s.lang, headers }));
 
   return stream;
 }
