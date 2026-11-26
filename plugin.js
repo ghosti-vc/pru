@@ -1210,6 +1210,8 @@ export async function resolve(ref) {
   };
   const main = primary(ref, t0);
   main.catch(() => {});
+  // El título en español se pide ya, mientras el addon responde: así está listo si hace falta un respaldo.
+  backupInfo(id, season ? "series" : "movie").catch(() => {});
   // Prioridad: el addon. Si tarda más de 3,5 s, los respaldos (AllCalidad y PelisGO) arrancan en paralelo.
   let settled = false;
   main.then(() => { settled = true; }, () => { settled = true; });
