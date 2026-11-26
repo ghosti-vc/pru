@@ -72,6 +72,11 @@ function yearOf(v) {
   return m ? parseInt(m[1], 10) : undefined;
 }
 
+function pageOf(cursor) {
+  const n = parseInt(String(cursor || ""), 10);
+  return n > 0 ? n : 1;
+}
+
 // ---------- tarjetas ----------
 function posterOf(p) {
   if (!p) return undefined;
@@ -142,7 +147,8 @@ async function catalog(type, opts) {
   if (o.search) url += "&search=" + encodeURIComponent(o.search);
   const j = await jsonGet(url);
   const items = (j.items || []).map(fromCatalog).filter(Boolean);
-  return { items, hasNext: !!(j.pagination && j.pagination.has_next) };
+  const more = !!(j.pagination && j.pagination.has_next);
+  return { items, next: more ? String(Math.max(1, Number(o.page) || 1) + 1) : undefined };
 }
 
 // ---------- portada ----------
@@ -176,7 +182,7 @@ export async function home() {
   if (appHome) {
     const hero = (appHome.heroMovies || []).map(movieItem).filter(Boolean);
     if (hero.length) {
-      rows.push(row("destacados", "movies", t("Destacados", "Featured"), hero, "movie:-:views_total"));
+      rows.push(row("destacados", "peliculas", t("Destacados", "Featured"), hero, "movie:-:views_total"));
     }
     const cats = (appHome.categories || [])
       .filter((c) => c && Array.isArray(c.movies) && c.movies.length)
@@ -187,7 +193,7 @@ export async function home() {
       if (!items.length) continue;
       const ref = c.id === "popular" ? "movie:-:views_total" : "movie:-:created_at";
       rows.push(
-        row("c-" + String(c.id || rows.length), "movies", String(c.name || t("Películas", "Movies")), items, ref)
+        row("c-" + String(c.id || rows.length), "peliculas", String(c.name || t("Películas", "Movies")), items, ref)
       );
     }
   }
@@ -204,7 +210,7 @@ export async function home() {
     try {
       const got = await catalog("movie", { genre: g[0] });
       if (!got.items.length) continue;
-      rows.push(row("g-" + g[0], "movies", t(g[1], g[2]), got.items, "movie:" + g[0] + ":created_at"));
+      rows.push(row("g-" + g[0], "peliculas", t(g[1], g[2]), got.items, "movie:" + g[0] + ":created_at"));
     } catch (e) {}
   }
 
@@ -217,29 +223,28 @@ export async function home() {
 }
 
 // ---------- búsqueda ----------
-export async function search(query, opts) {
+export async function search(query) {
   await kino.sleep(0);
-  const q = String(query || "").trim();
+  const q = String((query && query.q) || query || "").trim();
   if (!q) return { items: [] };
-  const page_ = Number((opts && opts.page) || 1);
+  const page_ = pageOf(query && query.cursor);
   const parts = await Promise.all([
     catalog("movie", { search: q, page: page_ }).catch(() => null),
     catalog("tv", { search: q, page: page_ }).catch(() => null),
   ]);
   const items = uniq([].concat(parts[0] ? parts[0].items : [], parts[1] ? parts[1].items : [])).slice(0, 100);
-  const hasNext = !!(parts[0] && parts[0].hasNext) || !!(parts[1] && parts[1].hasNext);
-  return { items, hasNext };
+  const more = !!(parts[0] && parts[0].next) || !!(parts[1] && parts[1].next);
+  return { items, next: more ? String(page_ + 1) : undefined };
 }
 
 // ---------- navegar ----------
-export async function browse(ref, opts) {
+export async function browse(ref, cursor) {
   await kino.sleep(0);
   const parts = String(ref || "movie:-:created_at").split(":");
   const type = parts[0] === "tv" ? "tv" : "movie";
   const genre = parts[1] && parts[1] !== "-" ? parts[1] : "";
   const order = parts[2] || "created_at";
-  const page_ = Number((opts && opts.page) || 1);
-  return await catalog(type, { genre, order, page: page_ });
+  return await catalog(type, { genre, order, page: pageOf(cursor) });
 }
 
 // ---------- episodios ----------
@@ -248,7 +253,6 @@ function epItem(tmdb, season, episode) {
   return {
     id: "t-" + tmdb + "-" + season + "-" + episode,
     title: tag,
-    kind: "episode",
     season,
     number: episode,
     ref: "t-" + tmdb + "-" + season + "-" + episode,
@@ -274,7 +278,7 @@ export async function episodes(ref) {
     });
   }
 
-  const items = [];
+  const list = [];
   const why = [];
 
   if (typeof kino.tmdb === "function") {
@@ -285,7 +289,7 @@ export async function episodes(ref) {
       for (const s of seasons) {
         if (!s || !s.season_number) continue;
         const n = Math.min(Number(s.episode_count) || 0, 200);
-        for (let e = 1; e <= n; e++) items.push(epItem(tmdb, s.season_number, e));
+        for (let e = 1; e <= n; e++) list.push(epItem(tmdb, s.season_number, e));
       }
     } catch (e) {
       why.push("tmdb:" + ((e && e.code) || "err"));
@@ -294,7 +298,7 @@ export async function episodes(ref) {
     why.push("tmdb:sin-api");
   }
 
-  if (!items.length) {
+  if (!list.length) {
     try {
       const j = await jsonGet(API + "/wordpress/lookup?type=tv&tmdb=" + encodeURIComponent(tmdb));
       const it = j && (j.item || j);
@@ -302,21 +306,21 @@ export async function episodes(ref) {
       if (it) {
         const seasons = Math.max(1, Number(it.number_of_seasons) || 1);
         const total = Math.max(1, Number(it.number_of_episodes) || 1);
-        pushRange(items, tmdb, seasons, total);
+        pushRange(list, tmdb, seasons, total);
       }
     } catch (e) {
       why.push("lookup:" + ((e && e.code) || "err"));
     }
   }
 
-  if (!items.length) {
+  if (!list.length) {
     throw kino.error("not_found", why.join(","), {
       userMessage: t("No pude listar los episodios.", "Could not list the episodes."),
     });
   }
 
-  kino.log("cine3", "episodios", tmdb, items.length);
-  return { items };
+  kino.log("cine3", "episodios", tmdb, list.length);
+  return { episodes: list };
 }
 
 // ---------- video ----------
@@ -438,7 +442,7 @@ export async function resolve(ref) {
   };
 
   const subs = subsFrom(html);
-  if (subs.length) stream.subtitles = subs.map((s) => ({ url: s.url, label: s.label, lang: s.lang, headers }));
+  if (subs.length) stream.subtitles = subs.map((s) => ({ url: s.url, label: s.label, lang: s.lang }));
 
   return stream;
 }
