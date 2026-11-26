@@ -1158,9 +1158,9 @@ async function acResolve(id, season, ep, deadline) {
   const pick = await findPick(info, (q) => acSearch(q), kind, "AllCalidad");
   let cands = [];
   if (!pick) {
-    kino.log("respaldo AllCalidad: no encontré '" + info.title.slice(0, 30) + "'" + (type === "movie" && info.tmdb ? ", pruebo el reproductor por TMDB" : ""));
-    if (type !== "movie" || !info.tmdb) return null;
-    cands = [{ url: "https://videoapp.zip/e/movie/" + info.tmdb, lang: 0, label: "AllCalidad · videoapp · Latino", referer: AC + "/" }];
+    kino.log("respaldo AllCalidad: no encontré '" + info.title.slice(0, 30) + "'" + (info.tmdb ? ", pruebo el reproductor por TMDB" : ""));
+    if (!info.tmdb) return null;
+    cands = [{ url: "https://videoapp.zip/e/" + (type === "movie" ? "movie/" + info.tmdb : "tv/" + info.tmdb + "/" + season + "/" + ep), lang: 0, label: "AllCalidad · videoapp · Latino", referer: AC + "/" }];
   }
   let spec = pick ? "m|" + pick.ref.split("|")[2] : "";
   if (pick && type === "series") {
