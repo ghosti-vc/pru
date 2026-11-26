@@ -1,24 +1,40 @@
 {
-  "id": "pelismxl",
-  "name": "PelisMXL",
-  "version": "0.2.2",
+  "id": "peliskronos",
+  "name": "PelisKRONOS",
+  "version": "0.1.14",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "icon": "icon.png",
-  "author": "ghosti-vc",
-  "description": "Películas y series en español: catálogo de TMDB y enlaces de MXL. Necesita el proxy en Termux.",
-  "categories": ["movies", "series"],
-  "hosts": ["prop.shiwaimov.com", "api.shiwaimov.com", "check.shiwaimov.com"],
-  "fetchHosts": "any",
+  "icon": "",
+  "author": "Ghosti-vc",
+  "description": "Películas y series con enlaces en español, sin cuenta.",
+  "categories": [
+    "movies",
+    "series"
+  ],
+  "hosts": [
+    "v3-cinemeta.strem.io",
+    "cinemeta-catalogs.strem.io",
+    "images.metahub.space",
+    "*.metahub.space",
+    "addons.4rever.cc",
+    "vimeos.net",
+    "*.vimeos.net",
+    "allcalidad.re",
+    "www.allcalidad.re",
+    "videoapp.zip",
+    "vimeos.zip",
+    "*.vimeos.zip",
+    "pelisgo.online",
+    "www.pelisgo.online",
+    "www.wikidata.org",
+    "image.tmdb.org"
+  ],
   "streamHosts": "any",
-  "capabilities": ["search", "home", "episodes", "resolve"],
-  "settings": [
-    { "key": "estado", "type": "status" },
-    {
-      "key": "proxy",
-      "type": "url",
-      "label": "Proxy en el celular",
-      "hint": "http://192.168.1.50:9223, si el servidor bloquea la conexión"
-    }
-  ]
+  "capabilities": [
+    "search",
+    "home",
+    "episodes",
+    "resolve"
+  ],
+  "fetchHosts": "any"
 }
