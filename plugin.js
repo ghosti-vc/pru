@@ -340,7 +340,7 @@ async function primary(ref, t0) {
     const left = 19000 - (Date.now() - t0) - 3000;
     if (i > 0 && left < 3000) break;
     try {
-      const r = await kino.fetch(bases[i] + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: i === 0 ? 15000 : Math.min(left, 8000) });
+      const r = await kino.fetch(bases[i] + "/stream/" + type + "/" + addonId + ".json", { headers: { Accept: "application/json" }, timeoutMs: i === 0 ? 17000 : Math.min(left, 8000) });
       if (!r.ok) throw kino.error("unavailable", "addon http " + r.status);
       const d = await r.json();
       if (d && Array.isArray(d.streams) && d.streams.some((x) => x && typeof x.url === "string" && x.url.indexOf("https://") === 0)) {
