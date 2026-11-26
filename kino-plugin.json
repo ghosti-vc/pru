@@ -1,7 +1,7 @@
 {
   "id": "pelismxl",
   "name": "PelisMXL",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -13,6 +13,7 @@
   "streamHosts": "any",
   "capabilities": ["search", "home", "episodes", "resolve"],
   "settings": [
+    { "key": "estado", "type": "status" },
     {
       "key": "proxy",
       "type": "url",
