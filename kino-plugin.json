@@ -1,15 +1,23 @@
 {
   "id": "pelismxl",
   "name": "PelisMXL",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
   "author": "ghosti-vc",
-  "description": "Películas y series en español: catálogo de TMDB y enlaces de MXL.",
+  "description": "Películas y series en español: catálogo de TMDB y enlaces de MXL. Necesita el proxy en Termux.",
   "categories": ["movies", "series"],
   "hosts": ["prop.shiwaimov.com", "api.shiwaimov.com", "check.shiwaimov.com"],
   "fetchHosts": "any",
   "streamHosts": "any",
-  "capabilities": ["search", "home", "episodes", "resolve"]
+  "capabilities": ["search", "home", "episodes", "resolve"],
+  "settings": [
+    {
+      "key": "proxy",
+      "type": "url",
+      "label": "Proxy en el celular",
+      "hint": "http://192.168.1.50:9223, si el servidor bloquea la conexión"
+    }
+  ]
 }
