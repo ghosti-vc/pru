@@ -1,10 +1,10 @@
 {
   "id": "peliskronos",
-  "name": "PELISKronos",
-  "version": "0.1.9",
+  "name": "PelisKRONOS",
+  "version": "0.1.10",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "icon": "icon.png",
+  "icon": "",
   "author": "Ghosti-vc",
   "description": "Películas y series con enlaces en español, sin cuenta.",
   "categories": [
@@ -23,7 +23,10 @@
     "www.allcalidad.re",
     "videoapp.zip",
     "vimeos.zip",
-    "*.vimeos.zip"
+    "*.vimeos.zip",
+    "pelisgo.online",
+    "www.pelisgo.online",
+    "www.wikidata.org"
   ],
   "streamHosts": "any",
   "capabilities": [
