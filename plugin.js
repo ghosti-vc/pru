@@ -1,12 +1,13 @@
 // PelisMXL — plugin de Kino.
 // Catálogo por kino.tmdb (sin clave en el código). Enlaces por la API de MXL.
-// La API de MXL está detrás de un WAF de Cloudflare que solo deja pasar OkHttp
-// 4.12.0 nativo en Android: ni Chrome, ni curl, ni Kino pasan el filtro. Por eso
-// el plugin puede ir por el proxy OkHttp que corre en Termux (ajuste "proxy",
-// formato /proxy/{dominio}/{ruta}). Si no hay proxy, o falla, se intenta directo.
+// La API de MXL está detrás de un WAF de Cloudflare que solo deja pasar al
+// cliente de la app original. Se intenta imitar sus cabeceras (User-Agent
+// okhttp/4.12.0 y las de dispositivo); si aun así bloquea, se usa el proxy
+// OkHttp de Termux (ajuste "proxy", formato /proxy/{dominio}/{ruta}).
 
 const UA = "okhttp/4.12.0";
 const APPID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+const DEVICE = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const API = ["https://prop.shiwaimov.com", "https://api.shiwaimov.com", "https://check.shiwaimov.com"];
 const IMG = "https://image.tmdb.org/t/p/w500";
 const MAX_SERVERS = 6;
@@ -25,6 +26,8 @@ function tmdbLang() { return en() ? "en-US" : "es-ES"; }
 const MSG = {
   down: ["El servidor de MXL no responde ahora. Inténtalo más tarde.",
          "MXL is not answering right now. Try again later."],
+  noproxy: ["Falta el proxy. Configúralo y arráncalo en Termux.",
+            "The proxy is missing. Set it up and start it in Termux."],
   proxy: ["El proxy del celular no responde. Revísalo en Termux.",
           "The phone proxy is not answering. Check it in Termux."],
   empty: ["Este título no tiene ningún servidor disponible.",
@@ -70,11 +73,31 @@ function proxyFailed(body) {
   return /"(upstream_error|proxy_error)"/.test(String(body || "").slice(0, 200));
 }
 
+// Cabeceras calcadas del cliente de la app original.
 function apiHeaders() {
+  const now = new Date();
+  let offset = "";
+  try {
+    const mins = -now.getTimezoneOffset();
+    const abs = Math.abs(mins);
+    offset = (mins < 0 ? "-" : "+") + ("0" + Math.floor(abs / 60)).slice(-2) + ":" + ("0" + (abs % 60)).slice(-2);
+  } catch (e) {
+    offset = "-05:00";
+  }
   return {
     "User-Agent": UA,
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Content-Type": "application/json",
+    "clientType": "android_mxl",
+    "platformid": "android",
+    "devicemodel": "android",
+    "deviceId": DEVICE,
+    "versionCode": "80",
+    "rnVersion": "2.13.0",
+    "lang": en() ? "en" : "es",
+    "timezone": "GMT" + offset,
+    "token": ""
   };
 }
 
@@ -118,6 +141,7 @@ async function mxlJson(path) {
   const base = proxyBase();
   let last = "";
   let tried = 0;
+  let proxyOk = false;
 
   for (let i = 0; i < API.length; i++) {
     if (base) {
@@ -126,6 +150,7 @@ async function mxlJson(path) {
         const r = await kino.fetch(viaProxy(base, API[i] + full), { headers: apiHeaders() });
         const text = await bodyOf(r);
         if (text && !proxyFailed(text) && !blocked(text)) {
+          proxyOk = true;
           try {
             const data = JSON.parse(text);
             if (data) return data;
@@ -154,8 +179,11 @@ async function mxlJson(path) {
     }
   }
 
-  log("mxl sin respuesta", path, last, "intentos", tried);
-  if (last === "proxy") throw kino.error("unavailable", "mxl proxy", { userMessage: pick(MSG.proxy) });
+  log("mxl sin respuesta", path, last, "proxy", base ? "sí" : "no", "intentos", tried);
+  if (!base) throw kino.error("unavailable", "mxl sin proxy", { userMessage: pick(MSG.noproxy) });
+  if (last === "proxy" || !proxyOk) {
+    throw kino.error("unavailable", "mxl proxy", { userMessage: pick(MSG.proxy) });
+  }
   throw kino.error("unavailable", "mxl " + last, { userMessage: pick(MSG.down) });
 }
 
@@ -186,6 +214,21 @@ function toItem(r, kind) {
     item.rating = Math.round(r.vote_average * 10) / 10;
   }
   return item;
+}
+
+// ---------------------------------------------------------- estado del ajuste
+
+export async function settingsStatus() {
+  const base = proxyBase();
+  if (!base) return { estado: "Sin proxy. Arranca el proxy en Termux y escribe su dirección." };
+  try {
+    const r = await kino.fetch(base + "/health", { headers: { "User-Agent": UA } });
+    const text = await bodyOf(r);
+    if (r.ok && /"status"\s*:\s*"ok"/.test(text)) return { estado: "Proxy conectado." };
+    return { estado: "El proxy responde, pero no como se espera." };
+  } catch (e) {
+    return { estado: "El proxy no responde. Arráncalo en Termux." };
+  }
 }
 
 // ---------------------------------------------------------------- búsqueda
