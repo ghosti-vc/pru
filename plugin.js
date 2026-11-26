@@ -4,6 +4,7 @@
 const API = "https://videoapi.la/api/v1/public";
 const HOME_API = "https://cine-3-estrellas-five.vercel.app/api/tv/home";
 const EMBED_HOST = "videoapp.zip";
+const EMBED_BASE = "https://" + EMBED_HOST + "/e";
 const PLAYER_HOST = "vimeos.net";
 const IMG = "https://image.tmdb.org/t/p/w500";
 const UA =
@@ -52,10 +53,10 @@ async function page(url, referer) {
       "sec-fetch-site": "cross-site",
       "sec-fetch-user": "?1",
       "upgrade-insecure-requests": "1",
-      referer: referer || "https://" + EMBED_HOST + "/",
+      referer: referer || "https://" + EMBED_HOST,
     },
   });
-  if (r.status >= 400) throw kino.error("unavailable", "http " + r.status);
+  if (r.status >= 400) return "";
   return r.text;
 }
 
@@ -242,14 +243,14 @@ export async function browse(ref, opts) {
 }
 
 // ---------- episodios ----------
-function epItem(tmdb, season, episode, label) {
+function epItem(tmdb, season, episode) {
   const tag = "T" + season + "E" + String(episode).padStart(2, "0");
   return {
     id: "t-" + tmdb + "-" + season + "-" + episode,
-    title: label ? tag + " · " + label : tag,
-    season,
-    episode,
+    title: tag,
     kind: "episode",
+    season,
+    number: episode,
     ref: "t-" + tmdb + "-" + season + "-" + episode,
   };
 }
@@ -259,7 +260,7 @@ function pushRange(items, tmdb, seasons, total) {
   for (let s = 1; s <= seasons; s++) {
     for (let e = 1; e <= per; e++) {
       if (items.length >= 3000) return;
-      items.push(epItem(tmdb, s, e, ""));
+      items.push(epItem(tmdb, s, e));
     }
   }
 }
@@ -284,7 +285,7 @@ export async function episodes(ref) {
       for (const s of seasons) {
         if (!s || !s.season_number) continue;
         const n = Math.min(Number(s.episode_count) || 0, 200);
-        for (let e = 1; e <= n; e++) items.push(epItem(tmdb, s.season_number, e, ""));
+        for (let e = 1; e <= n; e++) items.push(epItem(tmdb, s.season_number, e));
       }
     } catch (e) {
       why.push("tmdb:" + ((e && e.code) || "err"));
@@ -309,7 +310,6 @@ export async function episodes(ref) {
   }
 
   if (!items.length) {
-    why.push("vacio");
     throw kino.error("not_found", why.join(","), {
       userMessage: t("No pude listar los episodios.", "Could not list the episodes."),
     });
@@ -368,6 +368,31 @@ function streamHeaders() {
   };
 }
 
+// ---------- rutas de embed ----------
+function embedPaths(kind, tmdb, parts) {
+  const t = encodeURIComponent(tmdb);
+  if (kind === "movie") {
+    return [EMBED_BASE + "?type=movie&tmdb=" + t, EMBED_BASE + "/movie/" + t];
+  }
+  const s = encodeURIComponent(parts[2] || "1");
+  const e = encodeURIComponent(parts[3] || "1");
+  return [
+    EMBED_BASE + "?type=tv&tmdb=" + t + "&season=" + s + "&episode=" + e,
+    EMBED_BASE + "/tv/" + t + "/" + s + "/" + e,
+  ];
+}
+
+// Abre una página de embed y devuelve su HTML con video, o "".
+async function openEmbed(path) {
+  const outer = await page(path);
+  if (!outer) return "";
+  if (findStream(outer)) return outer;
+  const inner = playerUrl(outer);
+  if (!inner) return "";
+  const html = await page(inner, "https://" + EMBED_HOST);
+  return findStream(html) ? html : "";
+}
+
 // ---------- resolve ----------
 export async function resolve(ref) {
   await kino.sleep(0);
@@ -380,23 +405,20 @@ export async function resolve(ref) {
     });
   }
 
-  let path = "/e/" + kind + "/" + encodeURIComponent(tmdb);
-  if (kind === "tv") {
-    path += "/" + (parts[2] || "1") + "/" + (parts[3] || "1");
+  let html = "";
+  let used = "";
+  for (const path of embedPaths(kind, tmdb, parts)) {
+    html = await openEmbed(path);
+    if (html) {
+      used = path;
+      break;
+    }
   }
 
-  const outer = await page("https://" + EMBED_HOST + path);
-  let html = outer;
-
-  if (!findStream(html)) {
-    const inner = playerUrl(html);
-    if (!inner) {
-      throw kino.error("unavailable", "sin reproductor", {
-        userMessage: t("Este título no tiene video disponible.", "This title has no video available."),
-      });
-    }
-    html = await page(inner, "https://" + EMBED_HOST + "/");
-    kino.log("cine3", "reproductor", kind, tmdb);
+  if (!html) {
+    throw kino.error("unavailable", "sin reproductor", {
+      userMessage: t("Este título no tiene video disponible.", "This title has no video available."),
+    });
   }
 
   const url = findStream(html);
@@ -405,6 +427,8 @@ export async function resolve(ref) {
       userMessage: t("Este título no tiene video disponible.", "This title has no video available."),
     });
   }
+
+  kino.log("cine3", "ruta", used.slice(0, 24), kind, tmdb);
 
   const headers = streamHeaders();
   const stream = {
