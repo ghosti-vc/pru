@@ -2,7 +2,7 @@
   "id": "cine3estrellas",
   "name": "Cine 3 Estrellas",
   "description": "Películas y series en español latino y subtituladas, en HD.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
