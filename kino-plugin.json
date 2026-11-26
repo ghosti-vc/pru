@@ -1,7 +1,7 @@
 {
   "id": "peliskronos",
   "name": "PelisKRONOS",
-  "version": "0.1.10",
+  "version": "0.1.12",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "",
