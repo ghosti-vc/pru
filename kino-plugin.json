@@ -1,39 +1,15 @@
 {
-  "id": "peliskronos",
-  "name": "PelisKRONOS",
-  "version": "0.1.13",
+  "id": "pelismxl",
+  "name": "PelisMXL",
+  "version": "0.1.0",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "icon": "",
-  "author": "Ghosti-vc",
-  "description": "Películas y series con enlaces en español, sin cuenta.",
-  "categories": [
-    "movies",
-    "series"
-  ],
-  "hosts": [
-    "v3-cinemeta.strem.io",
-    "cinemeta-catalogs.strem.io",
-    "images.metahub.space",
-    "*.metahub.space",
-    "addons.4rever.cc",
-    "vimeos.net",
-    "*.vimeos.net",
-    "allcalidad.re",
-    "www.allcalidad.re",
-    "videoapp.zip",
-    "vimeos.zip",
-    "*.vimeos.zip",
-    "pelisgo.online",
-    "www.pelisgo.online",
-    "www.wikidata.org"
-  ],
+  "icon": "icon.png",
+  "author": "ghosti-vc",
+  "description": "Películas y series en español: catálogo de TMDB y enlaces de MXL.",
+  "categories": ["movies", "series"],
+  "hosts": ["prop.shiwaimov.com", "api.shiwaimov.com", "check.shiwaimov.com"],
+  "fetchHosts": "any",
   "streamHosts": "any",
-  "capabilities": [
-    "search",
-    "home",
-    "episodes",
-    "resolve"
-  ],
-  "fetchHosts": "any"
+  "capabilities": ["search", "home", "episodes", "resolve"]
 }
