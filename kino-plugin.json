@@ -1,40 +1,24 @@
 {
-  "id": "peliskronos",
-  "name": "PelisKRONOS",
-  "version": "0.1.18",
+  "id": "cine3estrellas",
+  "name": "Cine 3 Estrellas",
+  "description": "Películas y series en español latino y subtituladas, en HD.",
+  "version": "1.0.0",
   "apiVersion": 9,
   "entry": "plugin.js",
-  "icon": "",
-  "author": "Ghosti-vc",
-  "description": "Películas y series con enlaces en español, sin cuenta.",
-  "categories": [
-    "movies",
-    "series"
-  ],
-  "hosts": [
-    "v3-cinemeta.strem.io",
-    "cinemeta-catalogs.strem.io",
-    "images.metahub.space",
-    "*.metahub.space",
-    "addons.4rever.cc",
-    "vimeos.net",
-    "*.vimeos.net",
-    "allcalidad.re",
-    "www.allcalidad.re",
-    "videoapp.zip",
-    "vimeos.zip",
-    "*.vimeos.zip",
-    "pelisgo.online",
-    "www.pelisgo.online",
-    "www.wikidata.org",
-    "image.tmdb.org"
-  ],
+  "icon": "icon.png",
+  "author": "ghosti-vc",
+  "capabilities": ["home", "search", "browse", "episodes", "resolve"],
+  "fetchHosts": "any",
   "streamHosts": "any",
-  "capabilities": [
-    "search",
-    "home",
-    "episodes",
-    "resolve"
-  ],
-  "fetchHosts": "any"
+  "categories": ["movies", "series"],
+  "hosts": [
+    "videoapi.la",
+    "videoapp.zip",
+    "vimeos.net",
+    "vimeos.zip",
+    "image.tmdb.org",
+    "cine-3-estrellas-five.vercel.app",
+    "minochinos.com",
+    "callistanise.com"
+  ]
 }
