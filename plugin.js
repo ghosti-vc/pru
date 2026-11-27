@@ -36,12 +36,14 @@ let lastCall = 0;
 let turn = Promise.resolve();
 
 function pause() {
-  const run = turn.then(async () => {
-    const wait = 400 - (Date.now() - lastCall);
-    if (lastCall && wait > 0) await kino.sleep(wait);
-  }).then(() => {
-    lastCall = Date.now();
-  });
+  const run = turn
+    .then(async () => {
+      const wait = 400 - (Date.now() - lastCall);
+      if (lastCall && wait > 0) await kino.sleep(wait);
+    })
+    .then(() => {
+      lastCall = Date.now();
+    });
   turn = run.catch(() => {});
   return run;
 }
