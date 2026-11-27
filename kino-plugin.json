@@ -1,24 +1,22 @@
+
 {
-  "id": "cine3estrellas",
-  "name": "Cine 3 Estrellas",
-  "description": "Películas y series en español latino y subtituladas, en HD.",
-  "version": "1.0.6",
-  "apiVersion": 9,
+  "id": "cactus-tv",
+  "name": "Cactus TV",
+  "description": "Canales en vivo y películas del portal, en español",
+  "version": "1.0.0",
+  "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
-  "author": "ghosti-vc",
-  "capabilities": ["home", "search", "browse", "episodes", "resolve"],
-  "fetchHosts": "any",
-  "streamHosts": "any",
-  "categories": ["movies", "series"],
+  "author": "PENDIENTE",
   "hosts": [
-    "videoapi.la",
-    "videoapp.zip",
-    "vimeos.net",
-    "vimeos.zip",
-    "image.tmdb.org",
-    "cine-3-estrellas-five.vercel.app",
-    "minochinos.com",
-    "callistanise.com"
-  ]
+    "ftmrmy.jdfey0cd.com",
+    "fuxok.nguvmqhpk.com",
+    "eajmnp.hcgv1dt8.com",
+    "mptec.dhkrxuzcy.com",
+    "hinumz.a878kkoyc.com",
+    "krdwvd.swcaw7qx.com"
+  ],
+  "streamHosts": "any",
+  "liveStreamHosts": "any",
+  "capabilities": ["channels"]
 }
