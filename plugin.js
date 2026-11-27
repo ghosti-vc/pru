@@ -1,448 +1,105 @@
-// Cine 3 Estrellas para Kino — películas y series en latino y subtituladas.
-// Fuente: API pública de VideoAPI. Un solo archivo, sin import.
 
-const API = "https://videoapi.la/api/v1/public";
-const HOME_API = "https://cine-3-estrellas-five.vercel.app/api/tv/home";
-const EMBED_HOST = "videoapp.zip";
-const EMBED_BASE = "https://" + EMBED_HOST + "/e";
-const PLAYER_HOST = "vimeos.net";
-const IMG = "https://image.tmdb.org/t/p/w500";
-const UA =
-  "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+// Llamadas al portal: cuerpo cifrado, respuesta descifrada, hosts rotados.
+import { wrap, unwrap } from "./crypto.js";
 
-// ---------- idioma ----------
-function t(esText, enText) {
-  return String(kino.lang || "es-CO").toLowerCase().startsWith("en") ? enText : esText;
-}
-
-// ---------- red ----------
-async function req(url, opts) {
-  const o = opts || {};
-  const headers = {
-    "user-agent": UA,
-    accept: "application/json, text/html;q=0.9, */*;q=0.8",
-    "accept-language": "es-419,es;q=0.9,en;q=0.8",
-  };
-  if (o.headers) for (const k in o.headers) headers[k] = o.headers[k];
-  const res = await kino.fetch(url, { headers, method: o.method || "GET" });
-  let text = "";
-  try {
-    text = await res.text();
-  } catch (e) {
-    text = "";
-  }
-  return { status: res.status || 0, text, url };
-}
-
-async function jsonGet(url) {
-  const r = await req(url);
-  if (r.status >= 400) throw kino.error("unavailable", "http " + r.status);
-  try {
-    return JSON.parse(r.text);
-  } catch (e) {
-    throw kino.error("unavailable", "json");
-  }
-}
-
-async function page(url, referer) {
-  const r = await req(url, {
-    headers: {
-      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "sec-fetch-dest": "iframe",
-      "sec-fetch-mode": "navigate",
-      "sec-fetch-site": "cross-site",
-      "sec-fetch-user": "?1",
-      "upgrade-insecure-requests": "1",
-      referer: referer || "https://" + EMBED_HOST,
-    },
-  });
-  if (r.status >= 400) return "";
-  return r.text;
-}
-
-// ---------- texto ----------
-function firstMatch(re, s) {
-  const m = String(s).match(re);
-  return m ? m[1] : "";
-}
-
-function yearOf(v) {
-  const s = String(v || "");
-  const m = s.match(/^(\d{4})/);
-  return m ? parseInt(m[1], 10) : undefined;
-}
-
-function pageOf(cursor) {
-  const n = parseInt(String(cursor || ""), 10);
-  return n > 0 ? n : 1;
-}
-
-// ---------- tarjetas ----------
-function posterOf(p) {
-  if (!p) return undefined;
-  if (/^https?:\/\//i.test(p)) return p;
-  return IMG + (p.startsWith("/") ? p : "/" + p);
-}
-
-function movieItem(x) {
-  if (!x) return null;
-  const tmdb = x.tmdb || x.id;
-  if (!tmdb || !x.title) return null;
-  const item = {
-    id: "m-" + tmdb,
-    title: String(x.title),
-    kind: "movie",
-    ref: "m-" + tmdb,
-  };
-  const poster = posterOf(x.poster_url || x.poster_path);
-  if (poster) item.poster = poster;
-  const year = yearOf(x.year || x.release_date);
-  if (year) item.year = year;
-  return item;
-}
-
-function showItem(x) {
-  if (!x) return null;
-  const tmdb = x.tmdb || x.id;
-  if (!tmdb || !x.title) return null;
-  const item = {
-    id: "t-" + tmdb,
-    title: String(x.title),
-    kind: "series",
-    ref: "t-" + tmdb,
-  };
-  const poster = posterOf(x.poster_url || x.poster_path);
-  if (poster) item.poster = poster;
-  const year = yearOf(x.year || x.first_air_date || x.release_date);
-  if (year) item.year = year;
-  return item;
-}
-
-function fromCatalog(x) {
-  return x && x.type === "tv" ? showItem(x) : movieItem(x);
-}
-
-function uniq(list) {
-  const seen = new Set();
-  const out = [];
-  for (const x of list) {
-    if (!x || seen.has(x.id)) continue;
-    seen.add(x.id);
-    out.push(x);
-  }
-  return out;
-}
-
-// ---------- catálogo ----------
-async function catalog(type, opts) {
-  const o = opts || {};
-  let url =
-    API +
-    "/catalog?type=" +
-    (type === "tv" ? "tv" : "movie") +
-    "&page=" +
-    Math.max(1, Number(o.page) || 1);
-  if (o.order) url += "&order=" + encodeURIComponent(o.order);
-  if (o.genre) url += "&genre=" + encodeURIComponent(o.genre);
-  if (o.search) url += "&search=" + encodeURIComponent(o.search);
-  const j = await jsonGet(url);
-  const items = (j.items || []).map(fromCatalog).filter(Boolean);
-  const more = !!(j.pagination && j.pagination.has_next);
-  return { items, next: more ? String(Math.max(1, Number(o.page) || 1) + 1) : undefined };
-}
-
-// ---------- portada ----------
-const GENRES = [
-  ["accion", "Acción", "Action"],
-  ["comedia", "Comedia", "Comedy"],
-  ["terror", "Terror", "Horror"],
-  ["drama", "Drama", "Drama"],
-  ["romance", "Romance", "Romance"],
-  ["ciencia-ficcion", "Ciencia ficción", "Sci-Fi"],
-  ["animacion", "Animación", "Animation"],
+const HOSTS = [
+  "ftmrmy.jdfey0cd.com",
+  "fuxok.nguvmqhpk.com",
+  "eajmnp.hcgv1dt8.com",
+  "mptec.dhkrxuzcy.com",
+  "hinumz.a878kkoyc.com",
+  "krdwvd.swcaw7qx.com",
 ];
 
-function row(id, genre, title, items, ref) {
-  return { id, genre, title, ref, items: items.slice(0, 60) };
+const HEADERS = {
+  apk: "com.android.msandroid",
+  apkVer: "43404",
+  spkgVer: "2024-09-10 06:25:30_33_13_",
+  "Content-Type": "application/json; charset=utf-8",
+  Connection: "Keep-Alive",
+  "User-Agent": "okhttp/3.12.12",
+};
+
+export const EP = {
+  snToken: "v3/snToken",
+  active: "v8/active",
+  getColumnContents: "v3/getColumnContents",
+  getItemData: "v4/getItemData",
+  search: "searchResourceOrPerson",
+  getLiveData: "v6/getLiveData",
+  startPlayVOD: "v10/startPlayVOD",
+  getSlbInfo: "v15/getSlbInfo",
+};
+
+let current = HOSTS[0];
+let lastCall = 0;
+let turn = Promise.resolve();
+
+function pause() {
+  const run = turn.then(async () => {
+    const wait = 400 - (Date.now() - lastCall);
+    if (lastCall && wait > 0) await kino.sleep(wait);
+  }).then(() => {
+    lastCall = Date.now();
+  });
+  turn = run.catch(() => {});
+  return run;
 }
 
-export async function home() {
-  await kino.sleep(0);
-  const results = await Promise.all([
-    jsonGet(HOME_API).catch(() => null),
-    catalog("tv", { order: "created_at" }).catch(() => null),
-    catalog("tv", { order: "views_total" }).catch(() => null),
-  ]);
-  const appHome = results[0];
-  const tvNew = results[1];
-  const tvTop = results[2];
+function codeOf(body) {
+  if (body.err != null) return String(body.err);
+  if (body.returnCode != null) return String(body.returnCode);
+  if (body.code != null) return String(body.code);
+  return null;
+}
 
-  const rows = [];
+function payloadOf(body) {
+  const raw = body.res !== undefined ? body.res : body.data;
+  if (typeof raw === "string" && /^[0-9a-fA-F]+$/.test(raw) && raw.length > 16) return JSON.parse(unwrap(raw));
+  return raw;
+}
 
-  if (appHome) {
-    const hero = (appHome.heroMovies || []).map(movieItem).filter(Boolean);
-    if (hero.length) {
-      rows.push(row("destacados", "peliculas", t("Destacados", "Featured"), hero, "movie:-:views_total"));
-    }
-    const cats = (appHome.categories || [])
-      .filter((c) => c && Array.isArray(c.movies) && c.movies.length)
-      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
-    for (const c of cats) {
-      if (rows.length >= 12) break;
-      const items = uniq(c.movies.map(movieItem).filter(Boolean));
-      if (!items.length) continue;
-      const ref = c.id === "popular" ? "movie:-:views_total" : "movie:-:created_at";
-      rows.push(
-        row("c-" + String(c.id || rows.length), "peliculas", String(c.name || t("Películas", "Movies")), items, ref)
-      );
-    }
-  }
-
-  if (tvNew && tvNew.items.length) {
-    rows.unshift(row("series-nuevas", "series", t("Series recientes", "Recent series"), tvNew.items, "tv:-:created_at"));
-  }
-  if (tvTop && tvTop.items.length) {
-    rows.push(row("series-populares", "series", t("Series populares", "Popular series"), tvTop.items, "tv:-:views_total"));
-  }
-
-  for (const g of GENRES) {
-    if (rows.length >= 20) break;
+export async function call(path, data) {
+  await pause();
+  const body = wrap(data);
+  const order = [current].concat(HOSTS.filter((host) => host !== current));
+  let failure = null;
+  for (const host of order) {
+    let res;
     try {
-      const got = await catalog("movie", { genre: g[0] });
-      if (!got.items.length) continue;
-      rows.push(row("g-" + g[0], "peliculas", t(g[1], g[2]), got.items, "movie:" + g[0] + ":created_at"));
-    } catch (e) {}
-  }
-
-  if (!rows.length) {
-    throw kino.error("unavailable", "portada", {
-      userMessage: t("No pude cargar el catálogo ahora.", "Could not load the catalog now."),
-    });
-  }
-  return rows;
-}
-
-// ---------- búsqueda ----------
-export async function search(query) {
-  await kino.sleep(0);
-  const q = String((query && query.q) || query || "").trim();
-  if (!q) return { items: [] };
-  const page_ = pageOf(query && query.cursor);
-  const parts = await Promise.all([
-    catalog("movie", { search: q, page: page_ }).catch(() => null),
-    catalog("tv", { search: q, page: page_ }).catch(() => null),
-  ]);
-  const items = uniq([].concat(parts[0] ? parts[0].items : [], parts[1] ? parts[1].items : [])).slice(0, 100);
-  const more = !!(parts[0] && parts[0].next) || !!(parts[1] && parts[1].next);
-  return { items, next: more ? String(page_ + 1) : undefined };
-}
-
-// ---------- navegar ----------
-export async function browse(ref, cursor) {
-  await kino.sleep(0);
-  const parts = String(ref || "movie:-:created_at").split(":");
-  const type = parts[0] === "tv" ? "tv" : "movie";
-  const genre = parts[1] && parts[1] !== "-" ? parts[1] : "";
-  const order = parts[2] || "created_at";
-  return await catalog(type, { genre, order, page: pageOf(cursor) });
-}
-
-// ---------- episodios ----------
-function epItem(tmdb, season, episode) {
-  const tag = "T" + season + "E" + String(episode).padStart(2, "0");
-  return {
-    id: "t-" + tmdb + "-" + season + "-" + episode,
-    title: tag,
-    season,
-    number: episode,
-    ref: "t-" + tmdb + "-" + season + "-" + episode,
-  };
-}
-
-function pushRange(items, tmdb, seasons, total) {
-  const per = Math.max(1, Math.ceil(total / Math.max(1, seasons)));
-  for (let s = 1; s <= seasons; s++) {
-    for (let e = 1; e <= per; e++) {
-      if (items.length >= 3000) return;
-      items.push(epItem(tmdb, s, e));
+      res = await kino.fetch("https://" + host + "/api/portalCore/" + path, {
+        method: "POST",
+        headers: HEADERS,
+        body,
+      });
+    } catch (err) {
+      failure = err;
+      continue;
     }
-  }
-}
-
-export async function episodes(ref) {
-  await kino.sleep(0);
-  const tmdb = String(ref).split("-")[1];
-  if (!tmdb) {
-    throw kino.error("not_found", "sin id", {
-      userMessage: t("No pude abrir esta serie.", "Could not open this series."),
-    });
-  }
-
-  const list = [];
-  const why = [];
-
-  if (typeof kino.tmdb === "function") {
+    if (!res.ok) {
+      failure = new Error("HTTP " + res.status);
+      continue;
+    }
+    let bodyJson;
     try {
-      const show = await kino.tmdb("/tv/" + tmdb, { language: "es-CO" });
-      const seasons = (show && show.seasons) || [];
-      why.push("tmdb:" + seasons.length);
-      for (const s of seasons) {
-        if (!s || !s.season_number) continue;
-        const n = Math.min(Number(s.episode_count) || 0, 200);
-        for (let e = 1; e <= n; e++) list.push(epItem(tmdb, s.season_number, e));
-      }
-    } catch (e) {
-      why.push("tmdb:" + ((e && e.code) || "err"));
+      bodyJson = JSON.parse(await res.text());
+    } catch {
+      failure = new Error("Respuesta no válida");
+      continue;
     }
-  } else {
-    why.push("tmdb:sin-api");
-  }
-
-  if (!list.length) {
-    try {
-      const j = await jsonGet(API + "/wordpress/lookup?type=tv&tmdb=" + encodeURIComponent(tmdb));
-      const it = j && (j.item || j);
-      why.push("lookup:" + (it && it.title ? "ok" : "vacio"));
-      if (it) {
-        const seasons = Math.max(1, Number(it.number_of_seasons) || 1);
-        const total = Math.max(1, Number(it.number_of_episodes) || 1);
-        pushRange(list, tmdb, seasons, total);
-      }
-    } catch (e) {
-      why.push("lookup:" + ((e && e.code) || "err"));
+    const code = codeOf(bodyJson);
+    if (code === null) {
+      failure = new Error("Respuesta sin estado");
+      continue;
     }
-  }
-
-  if (!list.length) {
-    throw kino.error("not_found", why.join(","), {
-      userMessage: t("No pude listar los episodios.", "Could not list the episodes."),
-    });
-  }
-
-  kino.log("cine3", "episodios", tmdb, list.length);
-  return { episodes: list };
-}
-
-// ---------- video ----------
-function findStream(html) {
-  const text = String(html).replace(/\\\//g, "/");
-  const block = firstMatch(/"stream_urls"\s*:\s*\[([\s\S]{0,4000}?)\]/, text);
-  const re = /"(https?:[^"\\]+)"/g;
-  let m;
-  while ((m = re.exec(block))) {
-    const u = m[1].trim();
-    if (/\.(m3u8|mp4)(\?|$)/i.test(u)) return u;
-  }
-  const any = text.match(/https?:\/\/[^\s"'\\<>]+?\.m3u8[^\s"'\\<>]*/i);
-  if (any && any.length) return any[0];
-  const mp4 = text.match(/https?:\/\/[^\s"'\\<>]+?\.mp4[^\s"'\\<>]*/i);
-  return mp4 && mp4.length ? mp4[0] : "";
-}
-
-function playerUrl(html) {
-  const m = String(html).match(
-    /https:\/\/vimeos\.net\/embed-[A-Za-z0-9]+\.html\?cf=[A-Za-z0-9_.\-]+/
-  );
-  return m ? m[0] : "";
-}
-
-function subsFrom(html) {
-  const out = [];
-  const block = firstMatch(/"default_subs"\s*:\s*(\[[\s\S]{0,4000}?\])/, html);
-  if (!block) return out;
-  const re = /\{[^{}]*?"lang"\s*:\s*"([^"]*)"[^{}]*?"url"\s*:\s*"([^"]+)"/g;
-  let m;
-  while ((m = re.exec(block))) {
-    const url = m[2].replace(/\\\//g, "/");
-    if (!/^https?:\/\//i.test(url)) continue;
-    const probe = url + " " + m[1];
-    const lang = /_spa|spanish|espa/i.test(probe) ? "es" : /_eng|english|ingl/i.test(probe) ? "en" : "";
-    const label = lang === "es" ? "Español" : lang === "en" ? "Inglés" : String(m[1] || "Sub");
-    out.push({ url, label, lang });
-  }
-  return out;
-}
-
-function streamHeaders() {
-  return {
-    Referer: "https://" + PLAYER_HOST + "/",
-    Origin: "https://" + PLAYER_HOST,
-    "User-Agent": UA,
-    Accept: "*/*",
-  };
-}
-
-// ---------- rutas de embed ----------
-function embedPaths(kind, tmdb, parts) {
-  const t = encodeURIComponent(tmdb);
-  if (kind === "movie") {
-    return [EMBED_BASE + "?type=movie&tmdb=" + t, EMBED_BASE + "/movie/" + t];
-  }
-  const s = encodeURIComponent(parts[2] || "1");
-  const e = encodeURIComponent(parts[3] || "1");
-  return [
-    EMBED_BASE + "?type=tv&tmdb=" + t + "&season=" + s + "&episode=" + e,
-    EMBED_BASE + "/tv/" + t + "/" + s + "/" + e,
-  ];
-}
-
-// Abre una página de embed y devuelve su HTML con video, o "".
-async function openEmbed(path) {
-  const outer = await page(path);
-  if (!outer) return "";
-  if (findStream(outer)) return outer;
-  const inner = playerUrl(outer);
-  if (!inner) return "";
-  const html = await page(inner, "https://" + EMBED_HOST);
-  return findStream(html) ? html : "";
-}
-
-// ---------- resolve ----------
-export async function resolve(ref) {
-  await kino.sleep(0);
-  const parts = String(ref).split("-");
-  const kind = parts[0] === "t" ? "tv" : "movie";
-  const tmdb = parts[1];
-  if (!tmdb) {
-    throw kino.error("not_found", "sin id", {
-      userMessage: t("No pude abrir este título.", "Could not open this title."),
-    });
-  }
-
-  let html = "";
-  let used = "";
-  for (const path of embedPaths(kind, tmdb, parts)) {
-    html = await openEmbed(path);
-    if (html) {
-      used = path;
-      break;
+    if (code !== "0") {
+      const err = new Error("El portal rechazó " + path);
+      err.code = code;
+      err.portalError = true;
+      throw err;
     }
+    current = host;
+    return payloadOf(bodyJson);
   }
-
-  if (!html) {
-    throw kino.error("unavailable", "sin reproductor", {
-      userMessage: t("Este título no tiene video disponible.", "This title has no video available."),
-    });
-  }
-
-  const url = findStream(html);
-  if (!url) {
-    throw kino.error("not_found", "sin video", {
-      userMessage: t("Este título no tiene video disponible.", "This title has no video available."),
-    });
-  }
-
-  kino.log("cine3", "ruta", used.slice(0, 24), kind, tmdb);
-
-  const headers = streamHeaders();
-  const stream = {
-    url,
-    mime: /\.mp4(\?|$)/i.test(url) ? "video/mp4" : "application/vnd.apple.mpegurl",
-    headers,
-  };
-
-  const subs = subsFrom(html);
-  if (subs.length) stream.subtitles = subs.map((s) => ({ url: s.url, label: s.label, lang: s.lang }));
-
-  return stream;
+  throw failure || new Error("El portal no respondió");
 }
