@@ -2,6 +2,8 @@
 // Token: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
 // Servidores: base64(base64) -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
 
+const VERSION_PLUGIN = "1.1.5";
+
 const BASE = "https://pelisjuanita.com/tv/app";
 const ORIGEN = "https://pelisjuanita.com";
 const CERT = "9381e4d77c1d42a3d02472331249bed8e76a8df6af7082214ea8fcfc30aa653d";
@@ -245,25 +247,43 @@ function esBasura(url) {
   return /imasdk|ads-twitter|doubleclick|google-analytics|jwpltx|googletag|pubads|prebid|\/vast|banner|pixel|analytics/i.test(url);
 }
 
+function recolectar(r, out, hondura) {
+  if (!r || (hondura || 0) > 4) return;
+  if (typeof r === "string") {
+    if (/^https?:\/\//i.test(r)) out.push({ url: r });
+    return;
+  }
+  if (Array.isArray(r)) {
+    for (const x of r) recolectar(x, out, (hondura || 0) + 1);
+    return;
+  }
+  if (typeof r !== "object") return;
+  if (typeof r.url === "string" && r.url) {
+    out.push({ url: r.url, headers: r.headers, mime: r.mime });
+  }
+  for (const k of ["urls", "media", "items", "requests", "streams", "sources", "data"]) {
+    if (r[k]) recolectar(r[k], out, (hondura || 0) + 1);
+  }
+}
+
 async function capturar(url) {
   await kino.sleep(0);
   const r = await kino.browser.capture(url, {
     captureAll: kino.browser.captureAll === true,
-    timeoutMs: 12000
+    timeoutMs: 8000
   });
+  try { kino.log("cruda " + JSON.stringify(r).slice(0, 320)); } catch (e) {}
+
   const cands = [];
-  if (r && r.url) cands.push({ url: r.url, headers: r.headers, mime: r.mime });
-  if (r && Array.isArray(r.urls)) {
-    for (const u of r.urls) {
-      const o = (typeof u === "string") ? { url: u } : (u || {});
-      cands.push({ url: o.url, headers: o.headers, mime: o.mime });
-    }
-  }
+  recolectar(r, cands, 0);
+
+  const vistos = {};
   const buenos = [];
   for (const c of cands) {
-    if (!c.url) continue;
+    if (!c.url || vistos[c.url]) continue;
+    vistos[c.url] = true;
     if (esBasura(c.url)) continue;
-    kino.log("cand " + String(c.url).slice(0, 140));
+    kino.log("cand " + String(c.url).slice(0, 150));
     buenos.push(c);
   }
   if (!buenos.length) return null;
@@ -370,10 +390,12 @@ export async function resolve(ref) {
   const partes = String(ref || "").split("#");
   const base = partes[0];
   const pedido = Number(partes[1]) || 0;
+  kino.log("resolve v" + VERSION_PLUGIN + " pedido=" + pedido + " ref=" + base);
 
   const det = await detalle(base);
   const d = (det && (det.datos || det)) || {};
   const lista = await decifrar(d.servidores);
+  kino.log("servidores " + lista.length);
   if (!lista.length) {
     throw kino.error("unavailable", "sin servidores", {
       userMessage: t("No hay ningún servidor disponible para este título.", "There is no server available for this title.")
@@ -387,18 +409,20 @@ export async function resolve(ref) {
     todas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
   }
 
+  const maxIntentos = pedido > 0 ? 2 : 3;
   const orden = [pedido];
-  for (let i = 0; i < lista.length && orden.length <= 4; i++) {
+  for (let i = 0; i < lista.length && orden.length < maxIntentos; i++) {
     if (i !== pedido) orden.push(i);
   }
 
-  const limite = Date.now() + 45000;
+  const limite = Date.now() + 20000;
   let muerto = false;
 
   for (const i of orden) {
     if (muerto || Date.now() > limite) break;
     const s = lista[i];
     if (!s || !s.url) continue;
+    kino.log("intento " + i + " " + s.nombre);
 
     let stream = null;
     if (esDirecto(s.url) || esHls(s.url)) {
@@ -411,15 +435,16 @@ export async function resolve(ref) {
           if (cap.headers) stream.headers = cap.headers;
         }
       } catch (e) {
-        if (e && e.code === "not_allowed") muerto = true;
-        kino.log("fallo servidor " + i + ": " + ((e && e.code) || (e && e.message) || "?"));
+        const cod = String((e && (e.code || e.message)) || "");
+        kino.log("fallo " + i + ": " + cod);
+        if (cod.indexOf("not_allowed") >= 0) muerto = true;
       }
     }
 
     if (stream) {
       const alt = todas.filter((a) => a.ref !== base + "#" + i).slice(0, MAX_ALT);
       if (alt.length) stream.alternatives = alt;
-      kino.log("elegido servidor " + i);
+      kino.log("elegido " + i + " " + String(stream.url).slice(0, 150));
       return stream;
     }
   }
@@ -450,7 +475,7 @@ async function enviarCompartir(v, share, installed, ctx) {
       ui: [{ close: SHEET }],
       state: { share: null },
       toast: t("Listo: tienes el borrador en Kino Social para revisarlo y publicarlo.",
-               "Done: the draft waits in Kino Social for you to review and post it.", ctx)
+               "Done: the draft waits in Kino Social for you to review and publish it.", ctx)
     };
   } catch (e) {
     const code = e && e.code;
