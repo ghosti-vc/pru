@@ -225,26 +225,50 @@ async function decifrar(txt) {
 }
 
 function esDirecto(url) {
-  return /\.(m3u8|mp4|mkv|webm)(\?|$)/i.test(url);
+  return /\.(m3u8|mp4|mkv|webm|m4v|mov)(\?|$)/i.test(url);
+}
+
+function esHls(url) {
+  return /\.m3u8(\?|$)/i.test(url) || /\/hls\//i.test(url) || /master\.m3u8/i.test(url) || /\/playlist/i.test(url) || /\/manifest/i.test(url);
+}
+
+function mimeDe(url, dado) {
+  if (esHls(url)) return "application/x-mpegURL";
+  if (/\.mp4(\?|$)/i.test(url)) return "video/mp4";
+  if (/\.mkv(\?|$)/i.test(url)) return "video/x-matroska";
+  if (/\.webm(\?|$)/i.test(url)) return "video/webm";
+  if (dado) return dado;
+  return "video/mp4";
+}
+
+function esBasura(url) {
+  return /imasdk|ads-twitter|doubleclick|google-analytics|jwpltx|googletag|pubads|prebid|\/vast|banner|pixel|analytics/i.test(url);
 }
 
 async function capturar(url) {
   await kino.sleep(0);
   const r = await kino.browser.capture(url, {
     captureAll: kino.browser.captureAll === true,
-    timeoutMs: 20000
+    timeoutMs: 12000
   });
   const cands = [];
-  if (r && r.url) cands.push({ url: r.url, headers: r.headers });
+  if (r && r.url) cands.push({ url: r.url, headers: r.headers, mime: r.mime });
   if (r && Array.isArray(r.urls)) {
-    for (const u of r.urls) cands.push({ url: u.url || u, headers: u.headers });
+    for (const u of r.urls) {
+      const o = (typeof u === "string") ? { url: u } : (u || {});
+      cands.push({ url: o.url, headers: o.headers, mime: o.mime });
+    }
   }
+  const buenos = [];
   for (const c of cands) {
     if (!c.url) continue;
-    if (/imasdk|ads-twitter|doubleclick|google-analytics|jwpltx|googletag/i.test(c.url)) continue;
-    if (esDirecto(c.url)) return c;
+    if (esBasura(c.url)) continue;
+    kino.log("cand " + String(c.url).slice(0, 140));
+    buenos.push(c);
   }
-  return null;
+  if (!buenos.length) return null;
+  const pref = buenos.find((c) => esHls(c.url)) || buenos.find((c) => esDirecto(c.url));
+  return pref || buenos[0];
 }
 
 /* ---------- catálogo ---------- */
@@ -358,37 +382,48 @@ export async function resolve(ref) {
 
   const etiqueta = (s) => s.idioma ? s.nombre + " (" + s.idioma + ")" : s.nombre;
 
-  const alternativas = [];
-  for (let i = 0; i < lista.length && alternativas.length < MAX_ALT; i++) {
-    if (i === pedido) continue;
-    alternativas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
+  const todas = [];
+  for (let i = 0; i < lista.length; i++) {
+    todas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
   }
 
   const orden = [pedido];
-  for (let i = 0; i < lista.length; i++) {
+  for (let i = 0; i < lista.length && orden.length <= 4; i++) {
     if (i !== pedido) orden.push(i);
   }
 
+  const limite = Date.now() + 45000;
+  let muerto = false;
+
   for (const i of orden) {
+    if (muerto || Date.now() > limite) break;
     const s = lista[i];
     if (!s || !s.url) continue;
+
     let stream = null;
-    if (esDirecto(s.url)) {
-      stream = { url: s.url, mime: /\.m3u8/i.test(s.url) ? "application/x-mpegURL" : "video/mp4" };
+    if (esDirecto(s.url) || esHls(s.url)) {
+      stream = { url: s.url, mime: mimeDe(s.url) };
     } else {
       try {
         const cap = await capturar(s.url);
         if (cap) {
-          stream = { url: cap.url, mime: /\.m3u8/i.test(cap.url) ? "application/x-mpegURL" : "video/mp4" };
+          stream = { url: cap.url, mime: mimeDe(cap.url, cap.mime) };
           if (cap.headers) stream.headers = cap.headers;
         }
-      } catch (e) {}
+      } catch (e) {
+        if (e && e.code === "not_allowed") muerto = true;
+        kino.log("fallo servidor " + i + ": " + ((e && e.code) || (e && e.message) || "?"));
+      }
     }
+
     if (stream) {
-      if (alternativas.length) stream.alternatives = alternativas;
+      const alt = todas.filter((a) => a.ref !== base + "#" + i).slice(0, MAX_ALT);
+      if (alt.length) stream.alternatives = alt;
+      kino.log("elegido servidor " + i);
       return stream;
     }
   }
+
   throw kino.error("unavailable", "sin captura", {
     userMessage: t("No se pudo abrir el video. Prueba otro servidor.", "The video would not open. Try another server.")
   });
