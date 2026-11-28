@@ -15,4 +15,4 @@
     "social": { "repo": "kinotvapp/kino-social", "door": "wall", "calls": ["share"] }
   },
   "recommends": ["kinotvapp/kino-social"]
-}
+} 
