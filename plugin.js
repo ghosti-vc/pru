@@ -2,7 +2,7 @@
 // Token: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
 // Servidores: base64(base64) -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
 
-const VERSION_PLUGIN = "1.1.6";
+const VERSION_PLUGIN = "1.1.7";
 
 const BASE = "https://pelisjuanita.com/tv/app";
 const ORIGEN = "https://pelisjuanita.com";
@@ -14,11 +14,12 @@ const UA   = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (K
 const HDR  = { "User-Agent": UA, Accept: "application/json" };
 const SEED_TTL = 3600000;
 const MAX_ALT  = 8;
+const ESPERA_FALLO = 600000;
 const SOCIAL   = "kinotvapp/kino-social";
 const SHEET    = "compartir";
 
-const BUENOS = /vimeus|vimeos|callistanise|vidhide|voe\.sx|streamtape|hglink/i;
-const MALOS  = /waaw|filemoon|seriesplayer|bysesukior|savefiles|morencius/i;
+const BUENOS = /vimeus|vimeos|callistanise|vidhide|voe\.sx|streamtape|hglink|hanerix/i;
+const MALOS  = /waaw|filemoon|bysesukior|seriesplayer|savefiles|morencius/i;
 
 const GEN = {
   accion: "accion", "acción": "accion", comedia: "comedia", drama: "drama",
@@ -233,8 +234,12 @@ function esDirecto(url) {
   return /\.(m3u8|mp4|mkv|webm|m4v|mov)(\?|$)/i.test(url);
 }
 
+function esM3u8(url) {
+  return /\.m3u8(\?|$)/i.test(url);
+}
+
 function esHls(url) {
-  return /\.m3u8(\?|$)/i.test(url) || /\/hls\//i.test(url) || /master\.m3u8/i.test(url) || /\/playlist/i.test(url) || /\/manifest/i.test(url);
+  return esM3u8(url) || /\/hls\d*\//i.test(url) || /\/playlist/i.test(url) || /\/manifest/i.test(url) || /\.txt(\?|$)/i.test(url);
 }
 
 function mimeDe(url, dado) {
@@ -259,6 +264,17 @@ function limpiarHeaders(h) {
   return Object.keys(out).length ? out : undefined;
 }
 
+function puntosDe(r, nombre) {
+  const v = r[nombre];
+  if (typeof v === "number") return v;
+  return (v && Number(v.p)) || 0;
+}
+
+function falloDe(r, nombre) {
+  const v = r[nombre];
+  return (v && Number(v.f)) || 0;
+}
+
 async function cargarRank() {
   try {
     const s = await kino.storage.get("rank");
@@ -269,15 +285,33 @@ async function cargarRank() {
 }
 
 async function guardarRank(r) {
-  try { await kino.storage.set("rank", JSON.stringify(r)); } catch (e) {}
+  try {
+    const claves = Object.keys(r);
+    if (claves.length > 60) {
+      claves.sort((a, b) => puntosDe(r, b) - puntosDe(r, a));
+      const podado = {};
+      for (const k of claves.slice(0, 60)) podado[k] = r[k];
+      r = podado;
+    }
+    await kino.storage.set("rank", JSON.stringify(r));
+  } catch (e) {}
 }
 
 function prioridad(nombre, url) {
+  const txt = String(nombre || "") + " " + String(url || "");
   let p = 0;
-  if (esHls(url)) p += 3;
+  if (esM3u8(url)) p += 4;
+  else if (esHls(url)) p += 2;
   else if (esDirecto(url)) p += 1;
-  if (BUENOS.test(nombre)) p += 2;
-  if (MALOS.test(nombre)) p -= 3;
+  if (BUENOS.test(txt)) p += 2;
+  if (MALOS.test(txt)) p -= 3;
+  return p;
+}
+
+function puntajeDe(rank, nombre, url) {
+  let p = prioridad(nombre, url) + puntosDe(rank, nombre);
+  const f = falloDe(rank, nombre);
+  if (f && Date.now() - f < ESPERA_FALLO) p -= 6;
   return p;
 }
 
@@ -321,7 +355,10 @@ async function capturar(url) {
     buenos.push(c);
   }
   if (!buenos.length) return null;
-  const pref = buenos.find((c) => esHls(c.url)) || buenos.find((c) => esDirecto(c.url));
+  const pref =
+    buenos.find((c) => esM3u8(c.url)) ||
+    buenos.find((c) => esHls(c.url)) ||
+    buenos.find((c) => esDirecto(c.url));
   return pref || buenos[0];
 }
 
@@ -436,30 +473,25 @@ export async function resolve(ref) {
     });
   }
 
-  const etiqueta = (s) => s.idioma ? s.nombre + " (" + s.idioma + ")" : s.nombre;
+  const rank = await cargarRank();
 
+  const etiqueta = (s) => s.idioma ? s.nombre + " (" + s.idioma + ")" : s.nombre;
   const todas = [];
   for (let i = 0; i < lista.length; i++) {
-    todas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
+    todas.push({ i, label: etiqueta(lista[i]), ref: base + "#" + i });
   }
-
-  const rank = await cargarRank();
-  const puntaje = (i) => prioridad(lista[i].nombre, lista[i].url) + (Number(rank[lista[i].nombre]) || 0);
-  const indices = [];
-  for (let i = 0; i < lista.length; i++) indices.push(i);
-  indices.sort((a, b) => puntaje(b) - puntaje(a));
+  todas.sort((a, b) => puntajeDe(rank, lista[b.i].nombre, lista[b.i].url) - puntajeDe(rank, lista[a.i].nombre, lista[a.i].url));
 
   const orden = [];
   if (pedido > 0 && lista[pedido]) orden.push(pedido);
-  for (const i of indices) {
-    if (i === pedido) continue;
+  for (const t of todas) {
+    if (t.i === pedido) continue;
     if (orden.length >= 3) break;
-    orden.push(i);
+    orden.push(t.i);
   }
 
   const limite = Date.now() + 20000;
   let muerto = false;
-  let cambio = false;
 
   for (const i of orden) {
     if (muerto || Date.now() > limite) break;
@@ -486,20 +518,18 @@ export async function resolve(ref) {
     }
 
     if (stream) {
-      rank[s.nombre] = Math.min((Number(rank[s.nombre]) || 0) + 1, 20);
-      cambio = true;
-      const alt = todas.filter((a) => a.ref !== base + "#" + i).slice(0, MAX_ALT);
+      rank[s.nombre] = { p: Math.min(puntosDe(rank, s.nombre) + 1, 20), f: 0 };
+      await guardarRank(rank);
+      const alt = todas.filter((t) => t.i !== i).slice(0, MAX_ALT).map((t) => ({ label: t.label, ref: t.ref }));
       if (alt.length) stream.alternatives = alt;
       kino.log("elegido " + i + " " + String(stream.url).slice(0, 150));
-      if (cambio) await guardarRank(rank);
       return stream;
     }
 
-    rank[s.nombre] = Math.max((Number(rank[s.nombre]) || 0) - 1, -20);
-    cambio = true;
+    rank[s.nombre] = { p: Math.max(puntosDe(rank, s.nombre) - 1, -20), f: Date.now() };
   }
 
-  if (cambio) await guardarRank(rank);
+  await guardarRank(rank);
 
   throw kino.error("unavailable", "sin captura", {
     userMessage: t("No se pudo abrir el video. Prueba otro servidor.", "The video would not open. Try another server.")
