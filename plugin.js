@@ -2,7 +2,7 @@
 // Token: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
 // Servidores: base64(base64) -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
 
-const VERSION_PLUGIN = "1.1.5";
+const VERSION_PLUGIN = "1.1.6";
 
 const BASE = "https://pelisjuanita.com/tv/app";
 const ORIGEN = "https://pelisjuanita.com";
@@ -16,6 +16,9 @@ const SEED_TTL = 3600000;
 const MAX_ALT  = 8;
 const SOCIAL   = "kinotvapp/kino-social";
 const SHEET    = "compartir";
+
+const BUENOS = /vimeus|vimeos|callistanise|vidhide|voe\.sx|streamtape|hglink/i;
+const MALOS  = /waaw|filemoon|seriesplayer|bysesukior|savefiles|morencius/i;
 
 const GEN = {
   accion: "accion", "acción": "accion", comedia: "comedia", drama: "drama",
@@ -247,6 +250,37 @@ function esBasura(url) {
   return /imasdk|ads-twitter|doubleclick|google-analytics|jwpltx|googletag|pubads|prebid|\/vast|banner|pixel|analytics/i.test(url);
 }
 
+function limpiarHeaders(h) {
+  if (!h) return undefined;
+  const out = {};
+  for (const k of ["Referer", "Origin", "User-Agent", "Cookie", "Accept", "Accept-Language"]) {
+    if (typeof h[k] === "string" && h[k]) out[k] = h[k];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+async function cargarRank() {
+  try {
+    const s = await kino.storage.get("rank");
+    return s ? JSON.parse(s) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+async function guardarRank(r) {
+  try { await kino.storage.set("rank", JSON.stringify(r)); } catch (e) {}
+}
+
+function prioridad(nombre, url) {
+  let p = 0;
+  if (esHls(url)) p += 3;
+  else if (esDirecto(url)) p += 1;
+  if (BUENOS.test(nombre)) p += 2;
+  if (MALOS.test(nombre)) p -= 3;
+  return p;
+}
+
 function recolectar(r, out, hondura) {
   if (!r || (hondura || 0) > 4) return;
   if (typeof r === "string") {
@@ -270,9 +304,9 @@ async function capturar(url) {
   await kino.sleep(0);
   const r = await kino.browser.capture(url, {
     captureAll: kino.browser.captureAll === true,
-    timeoutMs: 8000
+    timeoutMs: 7000
   });
-  try { kino.log("cruda " + JSON.stringify(r).slice(0, 320)); } catch (e) {}
+  try { kino.log("cruda " + JSON.stringify(r).slice(0, 260)); } catch (e) {}
 
   const cands = [];
   recolectar(r, cands, 0);
@@ -409,14 +443,23 @@ export async function resolve(ref) {
     todas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
   }
 
-  const maxIntentos = pedido > 0 ? 2 : 3;
-  const orden = [pedido];
-  for (let i = 0; i < lista.length && orden.length < maxIntentos; i++) {
-    if (i !== pedido) orden.push(i);
+  const rank = await cargarRank();
+  const puntaje = (i) => prioridad(lista[i].nombre, lista[i].url) + (Number(rank[lista[i].nombre]) || 0);
+  const indices = [];
+  for (let i = 0; i < lista.length; i++) indices.push(i);
+  indices.sort((a, b) => puntaje(b) - puntaje(a));
+
+  const orden = [];
+  if (pedido > 0 && lista[pedido]) orden.push(pedido);
+  for (const i of indices) {
+    if (i === pedido) continue;
+    if (orden.length >= 3) break;
+    orden.push(i);
   }
 
   const limite = Date.now() + 20000;
   let muerto = false;
+  let cambio = false;
 
   for (const i of orden) {
     if (muerto || Date.now() > limite) break;
@@ -432,7 +475,8 @@ export async function resolve(ref) {
         const cap = await capturar(s.url);
         if (cap) {
           stream = { url: cap.url, mime: mimeDe(cap.url, cap.mime) };
-          if (cap.headers) stream.headers = cap.headers;
+          const h = limpiarHeaders(cap.headers);
+          if (h) stream.headers = h;
         }
       } catch (e) {
         const cod = String((e && (e.code || e.message)) || "");
@@ -442,12 +486,20 @@ export async function resolve(ref) {
     }
 
     if (stream) {
+      rank[s.nombre] = Math.min((Number(rank[s.nombre]) || 0) + 1, 20);
+      cambio = true;
       const alt = todas.filter((a) => a.ref !== base + "#" + i).slice(0, MAX_ALT);
       if (alt.length) stream.alternatives = alt;
       kino.log("elegido " + i + " " + String(stream.url).slice(0, 150));
+      if (cambio) await guardarRank(rank);
       return stream;
     }
+
+    rank[s.nombre] = Math.max((Number(rank[s.nombre]) || 0) - 1, -20);
+    cambio = true;
   }
+
+  if (cambio) await guardarRank(rank);
 
   throw kino.error("unavailable", "sin captura", {
     userMessage: t("No se pudo abrir el video. Prueba otro servidor.", "The video would not open. Try another server.")
