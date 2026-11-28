@@ -1,23 +1,18 @@
-
 {
-  "id": "cactus-tv",
-  "name": "Cactus TV",
-  "description": "Canales en vivo y películas del portal, en español",
+  "id": "pelisjuanita",
+  "name": "PelisJuanita",
+  "description": "Películas y series, en español.",
   "version": "1.0.0",
-  "apiVersion": 6,
+  "apiVersion": 20,
   "entry": "plugin.js",
   "icon": "icon.png",
-  "author": "PENDIENTE",
-  "hosts": [
-    "ftmrmy.jdfey0cd.com",
-    "fuxok.nguvmqhpk.com",
-    "eajmnp.hcgv1dt8.com",
-    "mptec.dhkrxuzcy.com",
-    "hinumz.a878kkoyc.com",
-    "krdwvd.swcaw7qx.com"
-  ],
+  "hosts": ["pelisjuanita.com", "image.tmdb.org"],
+  "fetchHosts": "any",
   "streamHosts": "any",
-  "liveStreamHosts": "any",
-  "capabilities": ["channels"]
+  "browser": true,
+  "capabilities": ["home", "search", "resolve", "screen", "download"],
+  "consumes": {
+    "social": { "repo": "kinotvapp/kino-social", "door": "wall", "calls": ["share"] }
+  },
+  "recommends": ["kinotvapp/kino-social"]
 }
- 
