@@ -1,10 +1,12 @@
 // PelisJuanita para Kino. Solo películas y series.
-// El token lo calcula el plugin: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
-// El seed sale de version.php y se guarda en kino.storage.
+// Token: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
+// Servidores: base64 -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
 
 const BASE = "https://pelisjuanita.com/tv/app";
 const CERT = "9381e4d77c1d42a3d02472331249bed8e76a8df6af7082214ea8fcfc30aa653d";
 const PKG  = "com.pelisjuanita.app";
+const VK   = "TuClaveSecretaSuperSeguraParaServidores2026!#".slice(0, 32);
+const KK   = "1234567890123456";
 const UA   = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36";
 const HDR  = { "User-Agent": UA, Accept: "application/json" };
 
@@ -36,7 +38,7 @@ async function seed() {
 
 async function token() {
   const s = await seed();
-  const min = Math.floor(Date.now() / 60000);          // minutos epoch
+  const min = Math.floor(Date.now() / 60000);
   const h = await kino.crypto.hash("sha256", CERT + ":" + PKG + "::" + s + ":" + min);
   return "app_version=8&pj_token=" + enc(h + "." + min);
 }
@@ -74,10 +76,10 @@ function generos(txt) {
 function generoFila(cat) {
   const c = String(cat || "").toLowerCase();
   if (c.indexOf("serie") >= 0) return "series";
+  if (c.indexOf("favorit") >= 0) return "series";
   if (c.indexOf("estreno") >= 0) return "peliculas";
   if (c.indexOf("vista") >= 0) return "peliculas";
   if (c.indexOf("destacad") >= 0) return "peliculas";
-  if (c.indexOf("favorit") >= 0) return "series";
   return "peliculas";
 }
 
@@ -99,38 +101,56 @@ function item(d) {
   return it;
 }
 
+function normServidor(s) {
+  if (typeof s === "string") return { nombre: "Servidor", url: s };
+  if (!s) return null;
+  const url = s.url || s.enlace || s.link || s.servidor || s.embed || s.file;
+  if (!url) return null;
+  return {
+    nombre: s.nombre || s.name || s.label || s.titulo || "Servidor",
+    url: String(url)
+  };
+}
+
 /* ---------- servidores ---------- */
 
-// Devuelve [{ nombre, url }]. Mientras no conozcamos el AES del sitio, se intenta
-// base64 (doble) -> JSON -> URLs sueltas.
 async function decifrar(txt) {
   await kino.sleep(0);
   if (!txt) return [];
-  let raw = String(txt);
-  for (let i = 0; i < 2; i++) {
-    try { raw = atob(raw); } catch { break; }
-  }
-  let lista = [];
+  let plano = "";
   try {
-    const j = JSON.parse(raw);
-    const arr = Array.isArray(j) ? j : (j && (j.servidores || j.datos)) || [];
-    for (const s of arr) {
-      const url = typeof s === "string" ? s : (s && (s.url || s.enlace || s.link));
-      if (url) lista.push({ nombre: (s && (s.nombre || s.nombre_servidor)) || "Servidor", url: String(url) });
+    const b64 = atob(String(txt).replace(/\s+/g, ""));
+    if (typeof kino.crypto.decrypt === "function") {
+      plano = kino.crypto.decrypt("aes-256-cbc", {
+        key: VK, iv: KK, data: b64,
+        keyEncoding: "utf8", ivEncoding: "utf8",
+        inputEncoding: "base64", outputEncoding: "utf8"
+      });
+    } else {
+      plano = atob(b64);
     }
-    if (lista.length) return lista;
-  } catch {}
-  const re = /https?:\/\/[^\s"'<>\\]+/g;
-  const m = raw.match(re) || [];
-  for (const u of m) lista.push({ nombre: "Servidor", url: u });
-  return lista;
+  } catch (e) {
+    throw kino.error("unavailable", "descifrado");
+  }
+  let arr = [];
+  try {
+    const j = JSON.parse(plano);
+    arr = Array.isArray(j) ? j : (j && j.servidores) || [];
+  } catch {
+    arr = (plano.match(/https?:\/\/[^\s"'<>\\]+/g) || []);
+  }
+  const out = [];
+  for (const s of arr) {
+    const n = normServidor(s);
+    if (n) out.push(n);
+  }
+  return out;
 }
 
 function esDirecto(url) {
   return /\.(m3u8|mp4|mkv|webm)(\?|$)/i.test(url);
 }
 
-// Abre el embed en el navegador oculto y se queda con el primer medio real.
 async function capturar(url) {
   await kino.sleep(0);
   const r = await kino.browser.capture(url, {
@@ -139,10 +159,12 @@ async function capturar(url) {
   });
   const cands = [];
   if (r && r.url) cands.push({ url: r.url, headers: r.headers });
-  if (r && Array.isArray(r.urls)) for (const u of r.urls) cands.push({ url: u.url || u, headers: u.headers });
+  if (r && Array.isArray(r.urls)) {
+    for (const u of r.urls) cands.push({ url: u.url || u, headers: u.headers });
+  }
   for (const c of cands) {
     if (!c.url) continue;
-    if (/imasdk|ads-twitter|doubleclick|google-analytics|jwpltx/i.test(c.url)) continue;
+    if (/imasdk|ads-twitter|doubleclick|google-analytics|jwpltx|googletag/i.test(c.url)) continue;
     if (esDirecto(c.url)) return c;
   }
   return null;
@@ -189,8 +211,7 @@ export async function search({ query, cursor }) {
 
 export async function episodes(ref) {
   await kino.sleep(0);
-  const p = String(ref || "").split(":");
-  const slug = p[1];
+  const slug = String(ref || "").split(":")[1];
   if (!slug) return [];
   const det = await api("series.php?slug=" + enc(slug));
   const d = (det && det.datos) || det || {};
@@ -218,45 +239,59 @@ export async function episodes(ref) {
 
 export async function resolve(ref) {
   await kino.sleep(0);
-  const p = String(ref || "").split(":");
+  const partes = String(ref || "").split("#");
+  const base = partes[0];
+  const pedido = Number(partes[1]) || 0;
+  const p = base.split(":");
+
   let det;
-  if (p[0] === "m") {
-    det = await api("movies.php?slug=" + enc(p[1]));
-  } else if (p[0] === "s") {
-    det = await api("series.php?slug=" + enc(p[1]) + "&t=" + enc(p[2]) + "&e=" + enc(p[3]));
-  } else {
-    throw kino.error("not_found", "ref");
-  }
+  if (p[0] === "m") det = await api("movies.php?slug=" + enc(p[1]));
+  else if (p[0] === "s") det = await api("series.php?slug=" + enc(p[1]) + "&t=" + enc(p[2]) + "&e=" + enc(p[3]));
+  else throw kino.error("not_found", "ref");
+
   const d = (det && (det.datos || det)) || {};
   const lista = await decifrar(d.servidores);
   if (!lista.length) throw kino.error("unavailable", "sin servidores");
 
+  const orden = [];
+  for (let i = 0; i < lista.length; i++) {
+    if (i !== pedido) orden.push(i);
+  }
+  if (pedido > 0 && lista[pedido]) orden.unshift(pedido);
+
   const alternativas = [];
-  for (const s of lista) {
-    const url = s.url;
-    if (esDirecto(url)) {
-      const stream = { url, mime: /\.m3u8/i.test(url) ? "application/x-mpegURL" : "video/mp4" };
-      const resto = lista.filter(x => x.url !== url).slice(0, 8)
-        .map(x => ({ label: x.nombre, ref: ref }));
-      if (resto.length) stream.alternatives = resto;
-      return stream;
-    }
+  for (const i of orden) {
+    if (i === pedido && pedido > 0) continue;
+    alternativas.push({ label: lista[i].nombre, ref: base + "#" + i });
+  }
+  if (alternativas.length > 8) alternativas.length = 8;
+
+  const s = lista[pedido] || lista[0];
+  let stream = null;
+  if (esDirecto(s.url)) {
+    stream = { url: s.url, mime: /\.m3u8/i.test(s.url) ? "application/x-mpegURL" : "video/mp4" };
+  } else {
     try {
-      const cap = await capturar(url);
+      const cap = await capturar(s.url);
       if (cap) {
-        const stream = {
-          url: cap.url,
-          mime: /\.m3u8/i.test(cap.url) ? "application/x-mpegURL" : "video/mp4"
-        };
+        stream = { url: cap.url, mime: /\.m3u8/i.test(cap.url) ? "application/x-mpegURL" : "video/mp4" };
         if (cap.headers) stream.headers = cap.headers;
-        const resto = lista.filter(x => x.url !== url).slice(0, 8)
-          .map(x => ({ label: x.nombre, ref: ref }));
-        if (resto.length) stream.alternatives = resto;
-        return stream;
       }
     } catch {}
   }
-  throw kino.error("unavailable", "sin captura");
+  if (!stream) {
+    for (const a of alternativas) {
+      const r2 = await resolve(a.ref);
+      if (r2 && r2.url) {
+        r2.label = s.nombre;
+        r2.alternatives = alternativas.filter(x => x.ref !== a.ref);
+        return r2;
+      }
+    }
+    throw kino.error("unavailable", "sin captura");
+  }
+  if (alternativas.length) stream.alternatives = alternativas;
+  return stream;
 }
 
 /* ---------- compartir ---------- */
@@ -297,6 +332,7 @@ export async function screen() {
         type: "SingleChildScrollView",
         children: [
           { type: "Text", text: "Películas y series en español. Abre un título y toca Reproducir." },
+          { type: "Text", text: "Si un servidor no carga, cámbialo desde el reproductor." },
           {
             type: "ElevatedButton",
             labelText: "Compartir la app",
@@ -313,5 +349,5 @@ export async function screenEvent(ev) {
   if (!ev || ev.name !== "compartir") return null;
   const r = await compartir("PelisJuanita", null, "movie");
   if (r && r.go) return { go: r.go };
-  return { toast: (r && (r.aviso || "Borrador guardado en Kino Social")) || "Borrador guardado en Kino Social" };
+  return { toast: (r && r.aviso) || "Borrador guardado en Kino Social" };
 }
