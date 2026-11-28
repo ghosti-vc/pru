@@ -11,20 +11,32 @@ const UA   = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (K
 const HDR  = { "User-Agent": UA, Accept: "application/json" };
 const SEED_TTL = 3600000;
 const MAX_ALT  = 8;
+const SOCIAL   = "kinotvapp/kino-social";
+const SHEET    = "compartir";
 
 const GEN = {
   accion: "accion", "acción": "accion", comedia: "comedia", drama: "drama",
   terror: "terror", miedo: "terror", animacion: "animacion", "animación": "animacion",
-  anime: "anime", documental: "documental", romance: "romance",
-  "ciencia ficcion": "ciencia-ficcion", "ciencia ficción": "ciencia-ficcion",
-  thriller: "thriller", suspenso: "thriller", infantil: "infantil",
-  familia: "infantil", musica: "musica", "música": "musica", deportes: "deportes",
+  anime: "anime", documental: "documental", documentales: "documentales",
+  romance: "romance", "ciencia ficcion": "ciencia-ficcion", "ciencia ficción": "ciencia-ficcion",
+  thriller: "suspenso", suspenso: "suspenso", intriga: "suspenso",
+  infantil: "infantil", familia: "familia", musica: "musical", "música": "musical",
+  musical: "musical", deportes: "deportes", deportivo: "deportivo",
   guerra: "belica", belica: "belica", "bélica": "belica", western: "western",
   misterio: "misterio", fantasia: "fantasia", "fantasía": "fantasia",
-  crimen: "crimen", aventura: "aventura"
+  crimen: "crimen", policial: "crimen", aventura: "aventura", historia: "historia",
+  biografia: "biografia", "biografía": "biografia", reality: "reality",
+  clasicos: "clasicos", "clásicos": "clasicos", noticias: "noticias",
+  entretenimiento: "entretenimiento", shonen: "shonen", isekai: "isekai",
+  mecha: "mecha", escolar: "escolar"
 };
 
+let cache = { filas: null, mapa: null, detalle: null, error: null };
+
 function enc(v) { return encodeURIComponent(String(v)); }
+function en(ctx) { return String((ctx && ctx.lang) || kino.lang || "").startsWith("en"); }
+function t(es, ingles, ctx) { return en(ctx) ? ingles : es; }
+function idSeguro(s) { return String(s || "").replace(/[^A-Za-z0-9._~-]/g, "-").slice(0, 110) || "x"; }
 
 /* ---------- token ---------- */
 
@@ -72,7 +84,8 @@ async function api(ruta, extra) {
 
 function poster(p) {
   if (!p) return undefined;
-  if (/^https?:/i.test(p)) return p;
+  if (/^https:/i.test(p)) return p;
+  if (/^http:/i.test(p)) return p;
   return "https://image.tmdb.org/t/p/w342" + (p.charAt(0) === "/" ? p : "/" + p);
 }
 
@@ -81,7 +94,7 @@ function generos(txt) {
   const out = [];
   for (const g of String(txt).split(/[,/|]/)) {
     const k = GEN[g.trim().toLowerCase()];
-    if (k && out.indexOf(k) < 0) out.push(k);
+    if (k && out.indexOf(k) < 0 && out.length < 5) out.push(k);
   }
   return out.length ? out : undefined;
 }
@@ -91,26 +104,28 @@ function generoFila(cat) {
   const exacto = GEN[c.trim()];
   if (exacto) return exacto;
   for (const k in GEN) {
-    if (c.indexOf(k) >= 0) return GEN[k];
+    if (k.length > 3 && c.indexOf(k) >= 0) return GEN[k];
   }
-  if (c.indexOf("serie") >= 0 || c.indexOf("favorit") >= 0) return "series";
+  if (c.indexOf("serie") >= 0) return "series";
   return "peliculas";
 }
 
 function item(d) {
   const serie = String(d.tipo || "").toUpperCase() === "SERIES";
-  const slug = d.slug || d.id;
+  const slug = String(d.slug || d.id || "");
+  if (!slug) return null;
   const anio = String(d.fecha_estreno || d["año"] || "").slice(0, 4);
   const it = {
-    id: (serie ? "s:" : "m:") + slug,
-    title: d.titulo || d.nombre || "",
+    id: (serie ? "s-" : "m-") + idSeguro(slug),
+    ref: (serie ? "s:" : "m:") + slug,
+    title: d.titulo || d.nombre || "Sin título",
     kind: serie ? "series" : "movie",
     poster: poster(d.img_frente || d.img_fondo),
     plot: d.sinopsis || undefined,
     genres: generos(d.genero),
-    ids: d.TMDbId ? { tmdb: String(d.TMDbId) } : undefined
+    ids: d.TMDbId ? { tmdb: Number(d.TMDbId) || undefined } : undefined
   };
-  if (anio) it.year = Number(anio) || undefined;
+  if (anio && Number(anio) > 1880) it.year = Number(anio);
   if (d.es_adulto === 1 || d.es_adulto === "1") it.adult = true;
   return it;
 }
@@ -131,7 +146,6 @@ function normServidor(s) {
 async function decifrar(txt) {
   await kino.sleep(0);
   if (!txt) return [];
-  if (VK.length !== 32) throw kino.error("unavailable", "llave");
   let plano = "";
   try {
     plano = await kino.crypto.decrypt("aes-256-cbc", {
@@ -186,16 +200,24 @@ export async function home() {
   await kino.sleep(0);
   const j = await api("home.php?q=&pagina=1");
   const filas = [];
+  let n = 0;
   for (const sec of (j && j.sections) || []) {
     const items = [];
     for (const d of sec.data || []) {
       if (String(d.tipo || "").toUpperCase() === "TV") continue;
-      if (!(d.slug || d.id)) continue;
-      items.push(item(d));
+      const it = item(d);
+      if (!it) continue;
+      items.push(it);
       if (items.length >= 60) break;
     }
     if (!items.length) continue;
-    filas.push({ title: sec.categoria, genre: generoFila(sec.categoria), items });
+    n++;
+    filas.push({
+      id: "fila-" + n + "-" + idSeguro(sec.categoria || "x").slice(0, 30),
+      title: sec.categoria || "Fila " + n,
+      genre: generoFila(sec.categoria),
+      items
+    });
     if (filas.length >= 20) break;
   }
   return filas;
@@ -209,8 +231,9 @@ export async function search({ query, cursor }) {
   const j = await api("buscar.php?q=" + enc(q) + "&pagina=" + pag);
   const items = [];
   for (const d of (j && j.datos) || []) {
-    if (!(d.slug || d.id)) continue;
-    items.push(item(d));
+    const it = item(d);
+    if (!it) continue;
+    items.push(it);
     if (items.length >= 100) break;
   }
   const total = Number(j && j.total_paginas) || 1;
@@ -222,7 +245,7 @@ export async function search({ query, cursor }) {
 export async function episodes(ref) {
   await kino.sleep(0);
   const slug = String(ref || "").split(":")[1];
-  if (!slug) return [];
+  if (!slug) return { episodes: [] };
   const det = await api("series.php?slug=" + enc(slug));
   const d = (det && det.datos) || det || {};
   const n = Number(d.temporadas) || 1;
@@ -230,27 +253,31 @@ export async function episodes(ref) {
   for (let t = 1; t <= Math.min(n, 30); t++) {
     const j = await api("series.php?slug=" + enc(slug) + "&t=" + t);
     const eps = (j && (j.episodios || (j.datos && j.datos.episodios))) || [];
+    let pos = 0;
     for (const e of eps) {
-      const num = Number(e.numero || e.episodio || 0);
+      pos++;
+      const num = Math.min(Math.max(Number(e.numero || e.episodio || pos) || pos, 1), 99999);
       out.push({
-        id: "s:" + slug + ":" + t + ":" + num,
-        title: e.titulo || "Episodio " + num,
-        kind: "episode",
         season: t,
-        episode: num
+        number: num,
+        ref: "s:" + slug + ":" + t + ":" + num,
+        title: e.titulo || undefined
       });
-      if (out.length >= 300) return out;
+      if (out.length >= 5000) return { episodes: out };
     }
   }
-  return out;
+  return { episodes: out };
 }
 
 /* ---------- reproducción ---------- */
 
 async function detalle(ref) {
   const p = String(ref || "").split(":");
-  if (p[0] === "m") return api("movies.php?slug=" + enc(p[1]));
-  if (p[0] === "s") return api("series.php?slug=" + enc(p[1]) + "&t=" + enc(p[2]) + "&e=" + enc(p[3]));
+  if (p[0] === "m" && p[1]) return api("movies.php?slug=" + enc(p[1]));
+  if (p[0] === "s" && p[1]) {
+    if (p[3]) return api("series.php?slug=" + enc(p[1]) + "&t=" + enc(p[2]) + "&e=" + enc(p[3]));
+    return api("series.php?slug=" + enc(p[1]));
+  }
   throw kino.error("not_found", "ref");
 }
 
@@ -270,7 +297,11 @@ export async function resolve(ref) {
   const det = await detalle(base);
   const d = (det && (det.datos || det)) || {};
   const lista = await decifrar(d.servidores);
-  if (!lista.length) throw kino.error("unavailable", "sin servidores");
+  if (!lista.length) {
+    throw kino.error("unavailable", "sin servidores", {
+      userMessage: t("No hay ningún servidor disponible para este título.", "There is no server available for this title.")
+    });
+  }
 
   const alternativas = [];
   for (let i = 0; i < lista.length && alternativas.length < MAX_ALT; i++) {
@@ -303,138 +334,343 @@ export async function resolve(ref) {
       return stream;
     }
   }
-  throw kino.error("unavailable", "sin captura");
+  throw kino.error("unavailable", "sin captura", {
+    userMessage: t("No se pudo abrir el video. Prueba otro servidor.", "The video would not open. Try another server.")
+  });
 }
 
 /* ---------- compartir ---------- */
 
-async function compartir(titulo, tmdb, tipo) {
+async function enviarCompartir(v, share, installed, ctx) {
   await kino.sleep(0);
-  if (typeof kino.plugins !== "object") return { aviso: "Actualiza Kino" };
-  try {
-    return await kino.plugins.call("social", "share", {
-      text: "La estoy viendo en Kino: " + titulo,
-      title: tmdb ? { kind: tipo || "movie", tmdb: String(tmdb) } : undefined,
-      from: "pelisjuanita"
-    });
-  } catch (e) {
-    if (e && e.code === "provider_missing") {
-      return { go: { installPlugin: { repo: "kinotvapp/kino-social" } } };
-    }
-    return { aviso: "No se pudo abrir Compartir" };
+  const texto = String(v.shareText || "").trim().slice(0, 500);
+  const conTitulo = !!share && v.shareTitle !== false;
+  if (!texto && !conTitulo) {
+    return { toast: t("Escribe algo o adjunta el título.", "Write something or attach the title.", ctx) };
   }
+  if (typeof kino.plugins !== "object") {
+    return { toast: t("Actualiza Kino para compartir en Kino Social.", "Update Kino to share on Kino Social.", ctx) };
+  }
+  const arg = { from: "PelisJuanita" };
+  if (texto) arg.text = texto;
+  if (conTitulo) arg.title = { kind: share.kind === "series" ? "series" : "movie", tmdb: Number(share.tmdb) };
+  try {
+    await kino.plugins.call("social", "share", arg);
+    return {
+      ui: [{ close: SHEET }],
+      state: { share: null },
+      toast: t("Listo: tienes el borrador en Kino Social para revisarlo y publicarlo.",
+               "Done: the draft waits in Kino Social for you to review and post it.", ctx)
+    };
+  } catch (e) {
+    const code = e && e.code;
+    if (code === "provider_missing" && (!installed || installed[SOCIAL] !== true)) {
+      return {
+        ui: [{ close: SHEET }],
+        go: { installPlugin: { repo: SOCIAL } },
+        toast: t("Instala Kino Social para compartir.", "Install Kino Social to share.", ctx)
+      };
+    }
+    if (code === "provider_missing") {
+      return { toast: t("Kino Social está apagado o le falta configurarse: revísalo en Plugins.",
+                        "Kino Social is off or needs setting up: check it in Plugins.", ctx) };
+    }
+    if (code === "not_declared") {
+      return { toast: t("Actualiza Kino Social para compartir.", "Update Kino Social to share.", ctx) };
+    }
+    return { toast: t("No se pudo enviar a Kino Social. Inténtalo de nuevo.",
+                      "Could not send to Kino Social. Try again.", ctx) };
+  }
+}
+
+function hojaCompartir(share, ctx) {
+  const hijos = [
+    {
+      type: "TextField", key: "shareText", multiline: true, maxLines: 6, maxLength: 500,
+      labelText: t("Qué quieres contar", "What do you want to say", ctx),
+      labelTextEn: "What do you want to say"
+    }
+  ];
+  if (share) {
+    hijos.push({
+      type: "Switch", key: "shareTitle", value: true,
+      labelText: t("Adjuntar el título", "Attach the title", ctx),
+      labelTextEn: "Attach the title"
+    });
+  }
+  hijos.push({
+    type: "Text", style: "caption", color: "muted",
+    text: "Llega a Kino Social como borrador: allá lo revisas y lo publicas.",
+    textEn: "It reaches Kino Social as a draft: you review and post it there."
+  });
+  hijos.push({
+    type: "ElevatedButton", key: "shareSend", icon: "send", submit: true,
+    labelText: t("Enviar a Kino Social", "Send to Kino Social", ctx),
+    labelTextEn: "Send to Kino Social"
+  });
+  return {
+    type: "BottomSheet", key: SHEET,
+    title: t("Compartir en Kino Social", "Share on Kino Social", ctx),
+    titleEn: "Share on Kino Social",
+    children: [{
+      type: "Form", key: "shareForm", gap: 12,
+      onSubmitted: { event: "sendShare", timeoutMs: 15000 },
+      children: hijos
+    }]
+  };
 }
 
 /* ---------- pantalla ---------- */
 
-function rutaActual() {
-  const a = kino.route && (kino.route.name || kino.route.route);
-  if (typeof a === "string" && a) return a;
-  const b = kino.screen && kino.screen.route;
-  return typeof b === "string" && b ? b : "main";
-}
-
-function argsActuales() {
-  const a = (kino.route && kino.route.args) || (kino.screen && kino.screen.args) || {};
-  return a && typeof a === "object" ? a : {};
-}
-
-function barra(titulo, leading) {
-  return { type: "AppBar", mergeWithKinoBar: true, dense: true, title: titulo, leading };
-}
-
-function tarjetas(items) {
-  const out = [];
-  for (const it of items) {
-    out.push({
-      type: "ListTile",
-      leading: it.poster ? { type: "Image", url: it.poster, width: 56, height: 84, fit: "cover" } : undefined,
-      title: it.title + (it.year ? " (" + it.year + ")" : ""),
-      subtitle: it.kind === "series" ? "Serie" : "Película",
-      onTap: { event: "detalle", args: { ref: it.id, title: it.title, tmdb: it.ids && it.ids.tmdb, kind: it.kind } }
-    });
-  }
-  return out;
-}
-
-async function pantallaMain() {
-  let filas = [];
-  try { filas = await home(); } catch {}
-  const kids = [
-    { type: "Text", text: "Películas y series en español. Toca un título para abrirlo.", canRequestFocus: true },
-    { type: "ElevatedButton", labelText: "Compartir la app", onPressed: { event: "compartirApp" } }
-  ];
-  for (const f of filas.slice(0, 10)) {
-    kids.push({ type: "Text", text: f.title, canRequestFocus: true });
-    for (const t of tarjetas(f.items.slice(0, 10))) kids.push(t);
-  }
-  if (!filas.length) {
-    kids.push({ type: "Text", text: "No se pudo cargar el catálogo. Revisa tu conexión y vuelve a abrir.", canRequestFocus: true });
-  }
+function barra(titulo, ctx, opts) {
+  const o = opts || {};
+  const leading = o.back
+    ? {
+        type: "IconButton", icon: "arrow_back",
+        labelText: t("Atrás", "Back", ctx), labelTextEn: "Back",
+        onPressed: { event: "back" }
+      }
+    : {
+        type: "IconButton", icon: "close",
+        labelText: t("Cerrar", "Close", ctx), labelTextEn: "Close",
+        onPressed: { close: true }
+      };
   return {
-    route: "main",
-    tree: { type: "Scaffold", appBar: barra("PelisJuanita", { close: true }), body: { type: "SingleChildScrollView", children: kids } }
+    type: "AppBar", mergeWithKinoBar: true, dense: true,
+    title: titulo, titleEn: o.titleEn, leading, actions: o.actions
   };
 }
 
-async function pantallaDetalle(a) {
-  const ref = String(a.ref || "");
-  if (!ref) return pantallaMain();
-  const titulo = String(a.title || "Título");
-  const serie = a.kind === "series";
-  const kids = [
-    { type: "Text", text: titulo, size: 20, weight: "bold", canRequestFocus: true },
-    { type: "Text", text: serie ? "Serie" : "Película", canRequestFocus: true },
-    { type: "ElevatedButton", labelText: "Reproducir", onPressed: { event: "play", args: { ref } } },
-    { type: "ElevatedButton", labelText: "Compartir", onPressed: { event: "compartirTitulo", args: { title: titulo, tmdb: a.tmdb, kind: a.kind } } }
-  ];
+function esqueleto() {
+  return { type: "Skeleton", shape: "block", height: 96 };
+}
+
+function filaTexto(txt) {
+  return { type: "Text", text: txt, style: "h5", canRequestFocus: true };
+}
+
+function tarjeta(it) {
+  return {
+    type: "ListTile",
+    leading: it.poster ? { type: "Image", url: it.poster, width: 56, aspect: "2:3", alt: it.title } : undefined,
+    title: it.title + (it.year ? " (" + it.year + ")" : ""),
+    subtitle: it.kind === "series" ? "Serie" : "Película",
+    subtitleEn: it.kind === "series" ? "Series" : "Movie",
+    onTap: { event: "detalle", arg: it.id }
+  };
+}
+
+async function cargarHome() {
+  cache.error = null;
+  try {
+    const filas = await home();
+    const mapa = {};
+    for (const f of filas) for (const it of f.items) mapa[it.id] = it;
+    cache.filas = filas;
+    cache.mapa = mapa;
+  } catch (e) {
+    cache.filas = null;
+    cache.mapa = null;
+    cache.error = (e && e.code) || "unavailable";
+  }
+}
+
+async function cargarDetalle(ref, base) {
+  cache.detalle = null;
+  const det = await detalle(ref);
+  const d = (det && (det.datos || det)) || {};
+  const serie = String(ref).charAt(0) === "s";
+  const info = {
+    ref,
+    titulo: d.titulo || d.nombre || (base && base.title) || t("Título", "Title"),
+    kind: serie ? "series" : "movie",
+    tmdb: Number(d.TMDbId) || (base && base.tmdb) || undefined,
+    plot: d.sinopsis || undefined,
+    poster: poster(d.img_frente || d.img_fondo),
+    eps: []
+  };
   if (serie) {
-    let eps = [];
-    try { eps = await episodes(ref); } catch {}
-    if (eps.length) {
-      kids.push({ type: "Text", text: "Capítulos", canRequestFocus: true });
-      for (const e of eps.slice(0, 100)) {
-        kids.push({
-          type: "ListTile",
-          title: e.title,
-          subtitle: "Temporada " + e.season + " · Episodio " + e.episode,
-          onTap: { event: "play", args: { ref: e.id } }
-        });
-      }
+    try {
+      const r = await episodes(ref);
+      info.eps = (r && r.episodes) || [];
+    } catch {}
+  }
+  cache.detalle = info;
+}
+
+function pantallaMain(ctx, state) {
+  const kids = [];
+  const filas = cache.filas;
+
+  if (cache.error) {
+    kids.push({
+      type: "Text",
+      text: t("No se pudo cargar el catálogo. Revisa tu conexión y vuelve a intentarlo.",
+              "The catalog could not load. Check your connection and try again.", ctx),
+      canRequestFocus: true
+    });
+    kids.push({
+      type: "ElevatedButton",
+      labelText: t("Reintentar", "Retry", ctx), labelTextEn: "Retry",
+      onPressed: { event: "refresh" }
+    });
+  } else if (!filas) {
+    kids.push(esqueleto(), esqueleto(), esqueleto());
+  } else {
+    kids.push({
+      type: "Text",
+      text: t("Películas y series en español. Toca un título para abrirlo.",
+              "Movies and series in Spanish. Tap a title to open it.", ctx),
+      canRequestFocus: true
+    });
+    for (const f of filas.slice(0, 10)) {
+      kids.push(filaTexto(f.title));
+      for (const it of f.items.slice(0, 10)) kids.push(tarjeta(it));
     }
   }
+
   return {
-    route: "detalle",
-    tree: { type: "Scaffold", appBar: barra(titulo, { back: true }), body: { type: "SingleChildScrollView", children: kids } }
+    type: "Scaffold",
+    appBar: barra("PelisJuanita", ctx, {
+      actions: [{
+        type: "IconButton", key: "shareBar", icon: "share",
+        labelText: t("Compartir", "Share", ctx), labelTextEn: "Share",
+        onPressed: { event: "openShare", arg: "" }
+      }]
+    }),
+    body: {
+      type: "SingleChildScrollView",
+      children: [{ type: "Column", padding: 16, gap: 12, children: kids }, hojaCompartir(state.share || null, ctx)]
+    }
   };
 }
 
-export async function screen() {
+function pantallaDetalle(ctx, state) {
+  const info = cache.detalle;
+  if (!info) {
+    return {
+      type: "Scaffold",
+      appBar: barra(t("Detalle", "Detail", ctx), ctx, { back: true }),
+      body: { type: "SingleChildScrollView", children: [esqueleto(), esqueleto()] }
+    };
+  }
+
+  const kids = [];
+  if (info.poster) kids.push({ type: "Image", url: info.poster, width: 140, aspect: "2:3", alt: info.titulo });
+  kids.push({ type: "Text", text: info.titulo, style: "h3", canRequestFocus: true });
+  kids.push({
+    type: "Text",
+    text: info.kind === "series" ? t("Serie", "Series", ctx) : t("Película", "Movie", ctx),
+    canRequestFocus: true
+  });
+  if (info.plot) kids.push({ type: "Text", text: info.plot, canRequestFocus: true });
+  kids.push({
+    type: "ElevatedButton",
+    labelText: t("Reproducir", "Play", ctx), labelTextEn: "Play", icon: "play",
+    onPressed: { go: { play: { ref: info.ref, kind: info.kind, id: info.id || idSeguro(info.ref), title: info.titulo } } }
+  });
+  if (info.tmdb) {
+    kids.push({
+      type: "Button", variant: "secondary", icon: "share",
+      labelText: t("Compartir", "Share", ctx), labelTextEn: "Share",
+      onPressed: { event: "openShare", arg: "title" }
+    });
+  }
+
+  if (info.eps.length) {
+    kids.push(filaTexto(t("Capítulos", "Episodes", ctx)));
+    for (const e of info.eps.slice(0, 150)) {
+      kids.push({
+        type: "ListTile",
+        title: e.title || t("Capítulo ", "Episode ", ctx) + e.number,
+        subtitle: t("Temporada ", "Season ", ctx) + e.season + " · " + t("Episodio ", "Episode ", ctx) + e.number,
+        onTap: { go: { play: { ref: e.ref, kind: "episode", id: idSeguro(e.ref), title: e.title || info.titulo } } }
+      });
+    }
+  }
+
+  return {
+    type: "Scaffold",
+    appBar: barra(info.titulo, ctx, { back: true }),
+    body: {
+      type: "SingleChildScrollView",
+      children: [{ type: "Column", padding: 16, gap: 12, children: kids }, hojaCompartir(state.share || null, ctx)]
+    }
+  };
+}
+
+export async function screen(ctx) {
   await kino.sleep(0);
-  const a = argsActuales();
-  if (rutaActual() === "detalle") return pantallaDetalle(a);
-  return pantallaMain();
+  const c = ctx || {};
+  const state = c.state || {};
+  const ruta = (c.route && c.route.name) || "main";
+  if (ruta === "detalle") return pantallaDetalle(c, state);
+  return pantallaMain(c, state);
 }
 
 export async function screenEvent(ev) {
   await kino.sleep(0);
-  const name = ev && ev.name;
-  const a = (ev && ev.args) || {};
-  if (name === "detalle") {
-    return { go: { screen: { route: "detalle", args: { ref: a.ref, title: a.title, tmdb: a.tmdb, kind: a.kind } } } };
+  const e = ev || {};
+  const name = e.name;
+  const arg = e.arg;
+  const state = e.state || {};
+  const installed = e.installed || {};
+  const ruta = (e.route && e.route.name) || "main";
+
+  if (name === "open") {
+    if (ruta === "detalle") {
+      const args = (e.route && e.route.args) || {};
+      const ref = typeof args.ref === "string" ? args.ref : null;
+      if (ref) {
+        try { await cargarDetalle(ref, { title: args.title, tmdb: args.tmdb }); } catch { cache.detalle = null; }
+      }
+    } else if (!cache.filas) {
+      await cargarHome();
+    }
+    return { state: { listo: true } };
   }
-  if (name === "play" && a.ref) {
-    return { go: { play: { ref: String(a.ref) } } };
+
+  if (name === "refresh") {
+    if (ruta === "detalle" && cache.detalle) {
+      try { await cargarDetalle(cache.detalle.ref, cache.detalle); }
+      catch { return { toast: t("No se pudo cargar el título.", "The title could not load.", e) }; }
+      return { state: { listo: true } };
+    }
+    await cargarHome();
+    return { state: { listo: true } };
   }
-  if (name === "compartirTitulo") {
-    const r = await compartir(String(a.title || "PelisJuanita"), a.tmdb, a.kind);
-    if (r && r.go) return { go: r.go };
-    return { toast: (r && r.aviso) || "Borrador guardado en Kino Social" };
+
+  if (name === "detalle" && arg) {
+    const it = cache.mapa && cache.mapa[String(arg)];
+    if (!it) return { toast: t("Ese título ya no está en la lista.", "That title is no longer in the list.", e) };
+    try {
+      await cargarDetalle(it.ref, it);
+    } catch {
+      return { toast: t("No se pudo cargar el título.", "The title could not load.", e) };
+    }
+    return { route: { push: "detalle", params: { ref: it.ref } } };
   }
-  if (name === "compartirApp") {
-    const r = await compartir("PelisJuanita", null, "movie");
-    if (r && r.go) return { go: r.go };
-    return { toast: (r && r.aviso) || "Borrador guardado en Kino Social" };
+
+  if (name === "back") return { route: { pop: true } };
+
+  if (name === "openShare") {
+    const info = cache.detalle;
+    const share = arg === "title" && info && info.tmdb
+      ? { kind: info.kind, tmdb: info.tmdb, name: info.titulo }
+      : null;
+    const texto = share
+      ? (en(e) ? 'I\'m watching "' + share.name + '"' : "Estoy viendo «" + share.name + "»")
+      : "";
+    return {
+      state: { share, inputs: { shareText: texto, shareTitle: !!share } },
+      ui: [{ open: SHEET }]
+    };
   }
+
+  if (name === "sendShare") {
+    const v = Object.assign({}, state.inputs || {}, (e.value && typeof e.value === "object") ? e.value : {});
+    return enviarCompartir(v, state.share || null, installed, e);
+  }
+
   return null;
 }
