@@ -1,8 +1,9 @@
 // PelisJuanita para Kino. Solo películas y series.
 // Token: sha256(cert:paquete::seed:minutoEpoch).minutoEpoch
-// Servidores: base64 -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
+// Servidores: base64(base64) -> AES-256-CBC (llave e IV fijos del sitio) -> JSON
 
 const BASE = "https://pelisjuanita.com/tv/app";
+const ORIGEN = "https://pelisjuanita.com";
 const CERT = "9381e4d77c1d42a3d02472331249bed8e76a8df6af7082214ea8fcfc30aa653d";
 const PKG  = "com.pelisjuanita.app";
 const VK   = "TuClaveSecretaSuperSeguraParaServidores2026!#".slice(0, 32);
@@ -51,7 +52,7 @@ async function seed() {
       const j = r.json();
       if (j && j.sec_seed) s = String(j.sec_seed);
     }
-  } catch {}
+  } catch (e) {}
   await kino.storage.set("seed", s);
   await kino.storage.set("seed_at", String(Date.now()));
   return s;
@@ -84,9 +85,10 @@ async function api(ruta, extra) {
 
 function poster(p) {
   if (!p) return undefined;
-  if (/^https:/i.test(p)) return p;
-  if (/^http:/i.test(p)) return p;
-  return "https://image.tmdb.org/t/p/w342" + (p.charAt(0) === "/" ? p : "/" + p);
+  const s = String(p).trim();
+  if (!s) return undefined;
+  if (/^https?:\/\//i.test(s)) return s;
+  return ORIGEN + (s.charAt(0) === "/" ? s : "/" + s);
 }
 
 function generos(txt) {
@@ -130,43 +132,94 @@ function item(d) {
   return it;
 }
 
-function normServidor(s) {
-  if (typeof s === "string") return { nombre: "Servidor", url: s };
-  if (!s) return null;
-  const url = s.url || s.enlace || s.link || s.servidor || s.embed || s.file;
-  if (!url) return null;
-  return {
-    nombre: s.nombre || s.name || s.label || s.titulo || "Servidor",
-    url: String(url)
-  };
+/* ---------- servidores ---------- */
+
+function nombreServidor(s, i) {
+  const a = String((s && s.server_name) || "").trim();
+  if (a && a.toLowerCase() !== "unknown") return a;
+  const b = String((s && s.ServerName) || "").trim();
+  if (b && b.toLowerCase() !== "unknown") return b;
+  const c = String((s && (s.nombre || s.name || s.label || s.titulo)) || "").trim();
+  return c || "Servidor " + (i + 1);
 }
 
-/* ---------- servidores ---------- */
+function urlServidor(s) {
+  if (typeof s === "string") return s.trim();
+  if (!s) return "";
+  const campos = ["url", "enlace", "link", "servidor", "embed", "file", "server_url", "iframe", "stream", "player"];
+  for (const k of campos) {
+    const v = s[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function idiomaServidor(s) {
+  const v = String((s && (s.idioma || s.language || s.lang)) || "").trim();
+  return v;
+}
+
+async function descifrarTexto(txt) {
+  const limpio = String(txt).replace(/\s+/g, "");
+  const intentos = [];
+  try {
+    const una = atob(limpio);
+    if (una) intentos.push(una);
+  } catch (e) {}
+  intentos.push(limpio);
+
+  let ultimo = null;
+  for (const data of intentos) {
+    try {
+      const plano = await kino.crypto.decrypt("aes-256-cbc", {
+        key: VK, iv: KK, data,
+        keyEncoding: "utf8", ivEncoding: "utf8",
+        inputEncoding: "base64", outputEncoding: "utf8"
+      });
+      let arr = null;
+      try {
+        const j = JSON.parse(plano);
+        if (Array.isArray(j)) arr = j;
+        else if (j && Array.isArray(j.servidores)) arr = j.servidores;
+        else if (j) arr = [j];
+      } catch (e) {
+        const urls = String(plano || "").match(/https?:\/\/[^\s"'<>\\]+/g) || [];
+        arr = urls.length ? urls : null;
+      }
+      if (arr && arr.length) return arr;
+    } catch (e) {
+      ultimo = e;
+    }
+  }
+  if (ultimo) kino.log("descifrado: " + (ultimo.name || "") + " " + (ultimo.message || String(ultimo)));
+  throw kino.error("unavailable", "descifrado");
+}
 
 async function decifrar(txt) {
   await kino.sleep(0);
   if (!txt) return [];
-  let plano = "";
-  try {
-    plano = await kino.crypto.decrypt("aes-256-cbc", {
-      key: VK, iv: KK, data: String(txt).replace(/\s+/g, ""),
-      keyEncoding: "utf8", ivEncoding: "utf8",
-      inputEncoding: "base64", outputEncoding: "utf8"
-    });
-  } catch (e) {
-    throw kino.error("unavailable", "descifrado");
-  }
-  let arr = [];
-  try {
-    const j = JSON.parse(plano);
-    arr = Array.isArray(j) ? j : (j && j.servidores) || [];
-  } catch {
-    arr = (String(plano).match(/https?:\/\/[^\s"'<>\\]+/g) || []);
+  let crudos = [];
+  if (Array.isArray(txt)) {
+    if (!txt.length) return [];
+    if (typeof txt[0] !== "string") crudos = txt;
+    else {
+      for (const s of txt) {
+        try { crudos.push(...(await descifrarTexto(s))); } catch (e) {}
+      }
+    }
+  } else if (typeof txt === "string") {
+    crudos = await descifrarTexto(txt);
+  } else if (typeof txt === "object") {
+    crudos = [txt];
   }
   const out = [];
-  for (const s of arr) {
-    const n = normServidor(s);
-    if (n) out.push(n);
+  for (let i = 0; i < crudos.length; i++) {
+    const url = urlServidor(crudos[i]);
+    if (!url) continue;
+    const n = { nombre: nombreServidor(crudos[i], i), url };
+    const id = idiomaServidor(crudos[i]);
+    if (id) n.idioma = id;
+    out.push(n);
   }
   return out;
 }
@@ -284,7 +337,7 @@ async function detalle(ref) {
 export async function prepare(ref) {
   await kino.sleep(0);
   const base = String(ref || "").split("#")[0];
-  try { await detalle(base); } catch {}
+  try { await detalle(base); } catch (e) {}
   return true;
 }
 
@@ -303,10 +356,12 @@ export async function resolve(ref) {
     });
   }
 
+  const etiqueta = (s) => s.idioma ? s.nombre + " (" + s.idioma + ")" : s.nombre;
+
   const alternativas = [];
   for (let i = 0; i < lista.length && alternativas.length < MAX_ALT; i++) {
     if (i === pedido) continue;
-    alternativas.push({ label: lista[i].nombre, ref: base + "#" + i });
+    alternativas.push({ label: etiqueta(lista[i]), ref: base + "#" + i });
   }
 
   const orden = [pedido];
@@ -316,7 +371,7 @@ export async function resolve(ref) {
 
   for (const i of orden) {
     const s = lista[i];
-    if (!s) continue;
+    if (!s || !s.url) continue;
     let stream = null;
     if (esDirecto(s.url)) {
       stream = { url: s.url, mime: /\.m3u8/i.test(s.url) ? "application/x-mpegURL" : "video/mp4" };
@@ -327,7 +382,7 @@ export async function resolve(ref) {
           stream = { url: cap.url, mime: /\.m3u8/i.test(cap.url) ? "application/x-mpegURL" : "video/mp4" };
           if (cap.headers) stream.headers = cap.headers;
         }
-      } catch {}
+      } catch (e) {}
     }
     if (stream) {
       if (alternativas.length) stream.alternatives = alternativas;
@@ -493,7 +548,7 @@ async function cargarDetalle(ref, base) {
     try {
       const r = await episodes(ref);
       info.eps = (r && r.episodes) || [];
-    } catch {}
+    } catch (e) {}
   }
   cache.detalle = info;
 }
@@ -567,11 +622,11 @@ function pantallaDetalle(ctx, state) {
   kids.push({
     type: "ElevatedButton",
     labelText: t("Reproducir", "Play", ctx), labelTextEn: "Play", icon: "play",
-    onPressed: { go: { play: { ref: info.ref, kind: info.kind, id: info.id || idSeguro(info.ref), title: info.titulo } } }
+    onPressed: { go: { play: { ref: info.ref, kind: info.kind, id: idSeguro(info.ref), title: info.titulo } } }
   });
   if (info.tmdb) {
     kids.push({
-      type: "Button", variant: "secondary", icon: "share",
+      type: "TextButton", icon: "share",
       labelText: t("Compartir", "Share", ctx), labelTextEn: "Share",
       onPressed: { event: "openShare", arg: "title" }
     });
@@ -622,7 +677,7 @@ export async function screenEvent(ev) {
       const args = (e.route && e.route.args) || {};
       const ref = typeof args.ref === "string" ? args.ref : null;
       if (ref) {
-        try { await cargarDetalle(ref, { title: args.title, tmdb: args.tmdb }); } catch { cache.detalle = null; }
+        try { await cargarDetalle(ref, { title: args.title, tmdb: args.tmdb }); } catch (x) { cache.detalle = null; }
       }
     } else if (!cache.filas) {
       await cargarHome();
@@ -633,7 +688,7 @@ export async function screenEvent(ev) {
   if (name === "refresh") {
     if (ruta === "detalle" && cache.detalle) {
       try { await cargarDetalle(cache.detalle.ref, cache.detalle); }
-      catch { return { toast: t("No se pudo cargar el título.", "The title could not load.", e) }; }
+      catch (x) { return { toast: t("No se pudo cargar el título.", "The title could not load.", e) }; }
       return { state: { listo: true } };
     }
     await cargarHome();
@@ -645,7 +700,7 @@ export async function screenEvent(ev) {
     if (!it) return { toast: t("Ese título ya no está en la lista.", "That title is no longer in the list.", e) };
     try {
       await cargarDetalle(it.ref, it);
-    } catch {
+    } catch (x) {
       return { toast: t("No se pudo cargar el título.", "The title could not load.", e) };
     }
     return { route: { push: "detalle", params: { ref: it.ref } } };
