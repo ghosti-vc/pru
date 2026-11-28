@@ -2,7 +2,7 @@
   "id": "pelisjuanita",
   "name": "PelisJuanita",
   "description": "Películas y series, en español.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 20,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -10,9 +10,13 @@
   "fetchHosts": "any",
   "streamHosts": "any",
   "browser": true,
-  "capabilities": ["home", "search", "resolve", "screen", "download"],
+  "capabilities": ["home", "search", "episodes", "resolve", "screen", "download"],
+  "screen": {
+    "main": { "title": "PelisJuanita" },
+    "detalle": { "title": "Detalle" }
+  },
   "consumes": {
     "social": { "repo": "kinotvapp/kino-social", "door": "wall", "calls": ["share"] }
   },
   "recommends": ["kinotvapp/kino-social"]
-} 
+}
